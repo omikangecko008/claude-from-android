@@ -1,0 +1,1137 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>部門計数ビジュアライザ</title>
+<!--
+  部門計数ビジュアライザ — 単一HTMLで完結する元帳データの可視化ツール
+  依存ライブラリなし。file:// のままブラウザで開いて使う。データは端末外に出ない。
+
+  コード構造(下位レイヤーは上位を参照しない。1〜5 は DOM 非依存で Node テスト可能):
+    1. CONFIG   キー列候補・閾値・カラーパレット(実データ適合時はここだけ触る)
+    2. util     文字コード判定・数値クリーニング・年月正規化 など
+    3. parsers  CSV / HTMLテーブル(偽xls)→ string[][]
+    4. model    正規化(Snapshot 化)・同一キー重複行の合算
+    5. compare  2断面の突合(added / removed / changed)
+    6. chart    SVG 折れ線グラフ
+    7. views    3ビュー(全体表 / 推移グラフ / 断面比較)の描画
+    8. app      state・イベント配線・デモデータ
+-->
+<style>
+:root{
+  --page:#f9f9f7; --surface:#fcfcfb;
+  --ink:#0b0b0b; --ink-2:#52514e; --muted:#898781;
+  --grid:#e1e0d9; --axis:#c3c2b7; --border:rgba(11,11,11,.10);
+  --accent:#2a78d6; --accent-deep:#1c5cab;
+  --up:#1c5cab; --down:#d03b3b;
+  --added-bg:rgba(12,163,12,.10); --removed-bg:rgba(137,135,129,.14);
+  --changed-bg:rgba(42,120,214,.07); --hover-bg:rgba(42,120,214,.06);
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{
+  background:var(--page); color:var(--ink);
+  font-family:system-ui,-apple-system,"Segoe UI","Hiragino Sans","Noto Sans JP",sans-serif;
+  font-size:14px; line-height:1.5;
+}
+.wrap{max-width:1200px;margin:0 auto;padding:12px 16px 48px}
+h1{font-size:18px;margin:8px 0 12px}
+h1 small{font-weight:normal;color:var(--muted);font-size:12px;margin-left:8px}
+
+/* ---- 読み込みエリア ---- */
+.loader{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:12px}
+.loader-row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.btn{
+  display:inline-block;background:var(--surface);border:1px solid var(--axis);border-radius:6px;
+  padding:6px 14px;cursor:pointer;font-size:14px;color:var(--ink);
+}
+.btn:hover{background:var(--hover-bg)}
+.btn-primary{background:var(--accent);border-color:var(--accent);color:#fff}
+.btn-primary:hover{background:var(--accent-deep)}
+#fileInput{display:none}
+.dropzone{
+  flex:1;min-width:200px;border:1.5px dashed var(--axis);border-radius:6px;padding:8px 12px;
+  color:var(--muted);text-align:center;font-size:12px;
+}
+.dropzone.dragover{border-color:var(--accent);color:var(--accent);background:var(--hover-bg)}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+.chip{
+  display:inline-flex;align-items:center;gap:6px;background:var(--page);
+  border:1px solid var(--border);border-radius:16px;padding:3px 6px 3px 12px;font-size:12px;
+}
+.chip .chip-name{cursor:pointer;text-decoration:underline dotted var(--muted)}
+.chip .chip-x{cursor:pointer;border:none;background:none;color:var(--muted);font-size:14px;padding:0 4px}
+.chip .chip-x:hover{color:var(--down)}
+.load-summary{margin-top:8px;font-size:12px;color:var(--ink-2)}
+.load-summary ul{margin:4px 0;padding-left:20px}
+.load-error{color:var(--down)}
+.warn-toggle{color:var(--muted);cursor:pointer;text-decoration:underline}
+.warn-list{color:var(--muted);margin:2px 0 2px 12px;padding-left:16px}
+
+/* ---- タブ ---- */
+.tabs{display:flex;gap:4px;border-bottom:1px solid var(--grid);margin-bottom:12px}
+.tab{
+  border:none;background:none;padding:8px 16px;cursor:pointer;font-size:14px;color:var(--ink-2);
+  border-bottom:2px solid transparent;margin-bottom:-1px;
+}
+.tab.active{color:var(--ink);border-bottom-color:var(--accent);font-weight:600}
+.view{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:12px}
+.hidden{display:none !important}
+.empty-note{color:var(--muted);padding:24px;text-align:center}
+
+/* ---- コントロール類 ---- */
+.controls{display:flex;flex-wrap:wrap;gap:8px 16px;align-items:center;margin-bottom:10px;font-size:13px}
+.controls label{color:var(--ink-2)}
+select,input[type=text]{
+  font-size:13px;padding:4px 6px;border:1px solid var(--axis);border-radius:4px;
+  background:var(--surface);color:var(--ink);max-width:100%;
+}
+input[type=text]{min-width:180px}
+details.colsel{position:relative;display:inline-block}
+details.colsel summary{cursor:pointer;list-style:none;border:1px solid var(--axis);border-radius:4px;padding:4px 10px;background:var(--surface)}
+details.colsel[open] summary{background:var(--hover-bg)}
+details.colsel .colsel-pop{
+  position:absolute;z-index:20;top:calc(100% + 4px);left:0;background:var(--surface);
+  border:1px solid var(--axis);border-radius:6px;padding:8px 12px;box-shadow:0 4px 12px rgba(0,0,0,.12);
+  max-height:280px;overflow-y:auto;min-width:180px;
+}
+.colsel-pop label{display:block;white-space:nowrap;color:var(--ink)}
+.checkline{display:inline-flex;align-items:center;gap:4px;white-space:nowrap}
+.dot{display:inline-block;width:10px;height:10px;border-radius:50%;flex:none}
+.note{font-size:12px;color:var(--muted)}
+
+/* ---- テーブル ---- */
+.tbl-scroll{overflow-x:auto;border:1px solid var(--grid);border-radius:6px;max-height:70vh;overflow-y:auto}
+table.data{border-collapse:separate;border-spacing:0;width:100%;font-size:13px}
+table.data th,table.data td{
+  padding:4px 10px;border-bottom:1px solid var(--grid);white-space:nowrap;background:var(--surface);
+}
+table.data thead th{
+  position:sticky;top:0;z-index:2;color:var(--ink-2);font-weight:600;text-align:left;
+  border-bottom:1.5px solid var(--axis);cursor:pointer;user-select:none;
+}
+table.data thead th.num{text-align:right}
+table.data td.num{text-align:right;font-variant-numeric:tabular-nums}
+table.data .k1{position:sticky;left:0;z-index:1;min-width:4.8em}
+table.data .k2{position:sticky;left:4.8em;z-index:1}
+table.data thead .k1,table.data thead .k2{z-index:3}
+table.data tbody tr:hover td{background:var(--hover-bg)}
+table.data tfoot td{
+  position:sticky;bottom:0;border-top:1.5px solid var(--axis);border-bottom:none;
+  font-weight:600;background:var(--page);
+}
+table.data tfoot .k1,table.data tfoot .k2{background:var(--page)}
+.merged-mark{color:var(--accent);cursor:help;font-size:11px;vertical-align:super}
+.neg{color:var(--down)}
+
+/* ---- 比較表 ---- */
+.cmp-summary{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px;font-size:12px}
+.cmp-badge{border-radius:12px;padding:2px 10px;border:1px solid var(--border)}
+.cmp-badge.added{background:var(--added-bg)}
+.cmp-badge.removed{background:var(--removed-bg)}
+.cmp-badge.changed{background:var(--changed-bg)}
+tr.row-added td{background:var(--added-bg)}
+tr.row-removed td{background:var(--removed-bg);color:var(--ink-2)}
+tr.row-removed td.num{text-decoration:line-through}
+.cmp-delta{font-size:11px;display:block}
+.cmp-delta.up{color:var(--up)}
+.cmp-delta.down{color:var(--down)}
+.state-cell{font-size:11px;color:var(--ink-2)}
+
+/* ---- グラフ ---- */
+.chart-box{width:100%}
+.chart-box svg{width:100%;height:auto;display:block}
+.legend{display:flex;flex-wrap:wrap;gap:6px 16px;margin-top:8px;font-size:12px;color:var(--ink-2)}
+.legend .checkline{cursor:default}
+#chartReadout{min-height:1.5em;margin-top:6px;font-size:13px;color:var(--ink)}
+svg .gridline{stroke:var(--grid);stroke-width:1}
+svg .axisline{stroke:var(--axis);stroke-width:1}
+svg .zeroline{stroke:var(--axis);stroke-width:1.5}
+svg text{fill:var(--muted);font-size:11px;font-family:inherit}
+svg .pt{cursor:pointer}
+
+@media (max-width:640px){
+  .wrap{padding:8px 8px 32px}
+  body{font-size:13px}
+  .controls{gap:6px 10px}
+  input[type=text]{min-width:120px}
+  table.data th,table.data td{padding:4px 6px}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>部門計数ビジュアライザ<small>元帳ファイル(CSV / 偽xls)をブラウザだけで可視化</small></h1>
+
+  <div class="loader">
+    <div class="loader-row">
+      <label class="btn btn-primary" for="fileInput">ファイルを選択</label>
+      <input type="file" id="fileInput" multiple accept=".csv,.xls,.xlsx,.txt,.html,text/csv,text/html">
+      <button class="btn" id="demoBtn" type="button">デモデータを読み込む</button>
+      <div class="dropzone" id="dropzone">ここに元帳ファイルをドラッグ&ドロップ(複数可。1ファイル = 1断面)</div>
+    </div>
+    <div class="chips" id="chips"></div>
+    <div class="load-summary" id="loadSummary"></div>
+  </div>
+
+  <div class="tabs" id="tabs">
+    <button class="tab active" data-view="table" type="button">全体表</button>
+    <button class="tab" data-view="chart" type="button">推移グラフ</button>
+    <button class="tab" data-view="compare" type="button">断面比較</button>
+  </div>
+
+  <!-- 全体表 -->
+  <section class="view" id="view-table">
+    <div class="controls">
+      <label>断面 <select id="tblSnapshot"></select></label>
+      <details class="colsel" id="tblColSel">
+        <summary>表示列</summary>
+        <div class="colsel-pop" id="tblColList"></div>
+      </details>
+      <label>絞り込み <input type="text" id="tblFilter" placeholder="コード・名称など(スペース区切りAND)"></label>
+      <label>年月 <select id="tblYmFrom"></select> 〜 <select id="tblYmTo"></select></label>
+      <span class="note" id="tblCount"></span>
+    </div>
+    <div id="tblBody"></div>
+  </section>
+
+  <!-- 推移グラフ -->
+  <section class="view hidden" id="view-chart">
+    <div class="controls">
+      <label>モード
+        <select id="chMode">
+          <option value="timeline">年月推移(1断面内)</option>
+          <option value="crossSnapshot">断面間推移(遡及変化)</option>
+        </select>
+      </label>
+      <label id="chSnapshotWrap">断面 <select id="chSnapshot"></select></label>
+      <label id="chYmWrap" class="hidden">年月 <select id="chYm"></select></label>
+      <label>指標 <select id="chMetric"></select></label>
+    </div>
+    <div class="controls" id="chProjects"></div>
+    <div class="chart-box" id="chartBox"></div>
+    <div class="legend" id="chartLegend"></div>
+    <div id="chartReadout" class="note">点をクリック / タップすると値を表示します</div>
+  </section>
+
+  <!-- 断面比較 -->
+  <section class="view hidden" id="view-compare">
+    <div class="controls">
+      <label>前回(base) <select id="cmpBase"></select></label>
+      <label>今回(target) <select id="cmpTarget"></select></label>
+      <label class="checkline"><input type="checkbox" id="cmpShowUnchanged">変化のない行も表示</label>
+    </div>
+    <div class="cmp-summary" id="cmpSummary"></div>
+    <div id="cmpBody"></div>
+  </section>
+</div>
+
+<script>
+"use strict";
+/* ===================================================================== */
+/* PURE:BEGIN — ここから PURE:END までは DOM 非依存(test/run-tests.mjs が抽出して実行) */
+/* ===================================================================== */
+
+/* ========== 1. CONFIG(実データ適合時はここだけ触る) ========== */
+const CONFIG = {
+  // キー列の候補名。実データの列名がヒットしない場合はここに追加する(大文字小文字は無視)
+  keyColumns: {
+    yyyymm: ["年月", "計上年月", "対象年月", "年月度", "yyyymm"],
+    projectCode: ["プロジェクトコード", "プロジェクトCD", "PJコード", "PJ-CD", "プロジェクト番号", "project_code"],
+  },
+  // プロジェクト名として表示に使う列の候補(なければコードのみ表示)
+  projectNameColumns: ["プロジェクト名", "プロジェクト名称", "PJ名", "案件名", "名称"],
+  // 非空値のうちこの割合以上が数値として解釈できれば numeric 列とみなす
+  numericThreshold: 0.9,
+  // 断面比較で「変化あり」とみなす差の閾値(浮動小数の誤差吸収)
+  epsilon: 0.005,
+  // グラフの系列色(カテゴリカル8色・固定順。9系列以上は選択不可とする)
+  palette: ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#4a3aa7", "#e34948"],
+  maxSeries: 8,
+};
+
+/* ========== 2. util ========== */
+
+// バイト列 → 文字列。UTF-8(BOM/厳格判定)を先に試し、失敗したら CP932(shift_jis)。
+// ※ 逆順は不可: shift_jis デコーダは寛容で UTF-8 バイト列も化けたまま通してしまう
+function decodeBytes(buf) {
+  const bytes = new Uint8Array(buf);
+  if (bytes[0] === 0xEF && bytes[1] === 0xBB && bytes[2] === 0xBF) {
+    return { text: new TextDecoder("utf-8").decode(bytes.subarray(3)), encoding: "UTF-8 (BOM)" };
+  }
+  try {
+    return { text: new TextDecoder("utf-8", { fatal: true }).decode(bytes), encoding: "UTF-8" };
+  } catch (e) {
+    // WHATWG Encoding 仕様の shift_jis は CP932 相当(NEC特殊文字・IBM拡張含む)
+    return { text: new TextDecoder("shift_jis").decode(bytes), encoding: "CP932" };
+  }
+}
+
+// 全角英数記号 → 半角
+function toHalfWidth(s) {
+  return s.replace(/[！-～]/g, ch => String.fromCharCode(ch.charCodeAt(0) - 0xFEE0))
+          .replace(/￥/g, "¥"); // ¥
+}
+
+// 業務システムの数値表記を number に。解釈できなければ null。
+// 対応: カンマ区切り / ¥・円・空白 / △▲(1,234) の負数 / 全角数字 / 末尾%
+function parseNumber(raw) {
+  if (raw == null) return null;
+  let s = toHalfWidth(String(raw).trim());
+  if (s === "" || s === "-") return null;
+  let neg = false;
+  if (/^[△▲]/.test(s)) { neg = true; s = s.slice(1); }
+  if (/^\(.*\)$/.test(s)) { neg = true; s = s.slice(1, -1); }
+  s = s.replace(/[,¥円\s　]/g, "");
+  if (s.endsWith("%")) s = s.slice(0, -1);
+  if (s.startsWith("-")) { neg = !neg; s = s.slice(1); }
+  if (!/^\d+(\.\d+)?$/.test(s)) return null;
+  const v = parseFloat(s);
+  return neg ? -v : v;
+}
+
+// 年月表記を 6桁 "yyyymm" に正規化。解釈できなければ null。
+// 対応: 202504 / 2025/4 / 2025-04 / 2025.04 / 2025年4月
+function normalizeYyyymm(raw) {
+  if (raw == null) return null;
+  const s = toHalfWidth(String(raw).trim());
+  let m = s.match(/^(\d{4})[\/\-.年]\s?(\d{1,2})月?$/);
+  if (!m && /^\d{6}$/.test(s)) m = [s, s.slice(0, 4), s.slice(4)];
+  if (!m) return null;
+  const mo = parseInt(m[2], 10);
+  if (mo < 1 || mo > 12) return null;
+  return m[1] + String(mo).padStart(2, "0");
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+function fmtNumber(n) {
+  if (n == null) return "";
+  return n.toLocaleString("ja-JP");
+}
+
+/* ========== 3. parsers ========== */
+
+// テキストの中身で形式を判定(拡張子は信用しない)
+function sniffFormat(text) {
+  const head = text.slice(0, 2000).trimStart().toLowerCase();
+  if (head.startsWith("<") || head.includes("<table")) return "html";
+  return "csv";
+}
+
+// RFC4180 準拠の CSV パーサー(クォート内のカンマ・改行・"" エスケープ、CRLF/LF 混在対応)
+function parseCsv(text) {
+  const rows = [];
+  let row = [], field = "", inQ = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (inQ) {
+      if (c === '"') {
+        if (text[i + 1] === '"') { field += '"'; i++; } else { inQ = false; }
+      } else field += c;
+    } else if (c === '"') {
+      inQ = true;
+    } else if (c === ",") {
+      row.push(field); field = "";
+    } else if (c === "\n") {
+      row.push(field); field = ""; rows.push(row); row = [];
+    } else if (c === "\r") {
+      if (text[i + 1] !== "\n") { row.push(field); field = ""; rows.push(row); row = []; }
+    } else field += c;
+  }
+  if (field !== "" || row.length) { row.push(field); rows.push(row); }
+  return rows.filter(r => r.some(f => String(f).trim() !== ""));
+}
+
+// 偽xls(実体はHTML)のテーブルパーサー。文書内の最大行数の <table> を採用
+// (業務システム出力はタイトル等の装飾用小テーブルを伴うことがあるため)。
+// DOMParser はスクリプト非実行・ネットワークアクセスなしで file:// でも安全。
+function parseHtmlTable(text) {
+  const warnings = [];
+  const doc = new DOMParser().parseFromString(text, "text/html");
+  const tables = [...doc.querySelectorAll("table")];
+  if (!tables.length) throw new Error("HTML 内に <table> が見つかりません");
+  let best = tables[0];
+  for (const t of tables) if (t.rows.length > best.rows.length) best = t;
+  if (best.querySelector("[colspan],[rowspan]")) {
+    warnings.push("colspan/rowspan を検出しました(未対応のため列がずれる可能性があります)");
+  }
+  const grid = [...best.rows].map(tr => [...tr.cells].map(td => td.textContent.trim()));
+  return { grid: grid.filter(r => r.some(f => f !== "")), warnings };
+}
+
+/* ========== 4. model ========== */
+// string[][] → Snapshot { id, name, format, encoding, columns, rows, warnings, rawRowCount, mergedKeyCount }
+//   columns: [{ key, kind: "numeric"|"dim" }](キー列以外、元ヘッダー順)
+//   rows:    [{ key: "yyyymm|code", yyyymm, projectCode, dims{}, values{}, mergedCount }](キー昇順)
+
+let _snapSeq = 0;
+
+function normalizeSnapshot(grid, meta, extraWarnings) {
+  const warnings = [...(extraWarnings || [])];
+  if (!grid || grid.length < 2) throw new Error("表データが空か、ヘッダー行しかありません");
+
+  // ヘッダー(重複名は連番を付けて一意化)
+  const seen = {};
+  const header = grid[0].map(h => {
+    let k = String(h).trim() || "(無名列)";
+    if (seen[k] != null) { seen[k]++; k = `${k}(${seen[k]})`; } else seen[k] = 1;
+    return k;
+  });
+
+  const findCol = cands => {
+    for (const cand of cands) {
+      const i = header.findIndex(h => h.toLowerCase() === cand.toLowerCase());
+      if (i >= 0) return i;
+    }
+    return -1;
+  };
+  const iYm = findCol(CONFIG.keyColumns.yyyymm);
+  const iPj = findCol(CONFIG.keyColumns.projectCode);
+  if (iYm < 0 || iPj < 0) {
+    throw new Error(
+      `キー列が見つかりません(年月: ${iYm >= 0 ? "OK" : "×"} / プロジェクトコード: ${iPj >= 0 ? "OK" : "×"})。` +
+      `CONFIG.keyColumns に実際の列名を追加してください。検出したヘッダー: [${header.join(", ")}]`);
+  }
+
+  const body = grid.slice(1);
+
+  // キー列以外の列種別を判定(非空値の 90% 以上が数値なら numeric)
+  const columns = [];
+  header.forEach((key, idx) => {
+    if (idx === iYm || idx === iPj) return;
+    let nonEmpty = 0, numeric = 0;
+    for (const r of body) {
+      const v = String(r[idx] ?? "").trim();
+      if (v === "") continue;
+      nonEmpty++;
+      if (parseNumber(v) != null) numeric++;
+    }
+    const kind = nonEmpty > 0 && numeric / nonEmpty >= CONFIG.numericThreshold ? "numeric" : "dim";
+    columns.push({ key, kind, index: idx });
+  });
+
+  // 行の正規化
+  const rawRows = [];
+  let skipped = 0;
+  for (const r of body) {
+    const yyyymm = normalizeYyyymm(r[iYm]);
+    const projectCode = String(r[iPj] ?? "").trim();
+    if (!yyyymm || !projectCode) { skipped++; continue; }
+    const dims = {}, values = {};
+    for (const c of columns) {
+      const v = String(r[c.index] ?? "").trim();
+      if (c.kind === "numeric") values[c.key] = parseNumber(v);
+      else dims[c.key] = v;
+    }
+    rawRows.push({ key: `${yyyymm}|${projectCode}`, yyyymm, projectCode, dims, values, mergedCount: 1 });
+  }
+  if (skipped > 0) warnings.push(`年月またはプロジェクトコードを解釈できない ${skipped} 行をスキップしました`);
+
+  const rows = mergeDuplicateKeys(rawRows, columns, warnings);
+  const mergedKeyCount = rows.filter(r => r.mergedCount > 1).length;
+
+  return {
+    id: "s" + (++_snapSeq),
+    name: meta.name, format: meta.format, encoding: meta.encoding,
+    columns: columns.map(({ key, kind }) => ({ key, kind })),
+    rows, warnings,
+    rawRowCount: rawRows.length, mergedKeyCount,
+  };
+}
+
+// 同一キー(年月|プロジェクトコード)の重複行を統合: 数値列は合算、dim 列は先勝ち。
+// 販管費プロジェクトの2行分割はこの汎用ルールで吸収する(特別扱いしない)。
+function mergeDuplicateKeys(rawRows, columns, warnings) {
+  const map = new Map();
+  for (const r of rawRows) {
+    const ex = map.get(r.key);
+    if (!ex) { map.set(r.key, r); continue; }
+    ex.mergedCount++;
+    for (const c of columns) {
+      if (c.kind === "numeric") {
+        const a = ex.values[c.key], b = r.values[c.key];
+        ex.values[c.key] = a == null && b == null ? null : (a ?? 0) + (b ?? 0);
+      } else {
+        const a = ex.dims[c.key], b = r.dims[c.key];
+        if (!a && b) ex.dims[c.key] = b;
+        else if (a && b && a !== b) {
+          warnings.push(`${r.key}: 列「${c.key}」の値が合算行間で異なります(「${a}」/「${b}」)。先の値を採用`);
+        }
+      }
+    }
+  }
+  return [...map.values()].sort((x, y) => (x.key < y.key ? -1 : x.key > y.key ? 1 : 0));
+}
+
+/* ========== 5. compare ========== */
+// 2断面をキーで突合。数値比較は両断面に共通する numeric 列で行う。
+function diffSnapshots(base, target) {
+  const numCols = target.columns
+    .filter(c => c.kind === "numeric" && base.columns.some(b => b.key === c.key && b.kind === "numeric"))
+    .map(c => c.key);
+  const bMap = new Map(base.rows.map(r => [r.key, r]));
+  const added = [], removed = [], changed = [];
+  let unchangedCount = 0;
+  for (const t of target.rows) {
+    const b = bMap.get(t.key);
+    if (!b) { added.push(t); continue; }
+    const deltas = {};
+    let any = false;
+    for (const col of numCols) {
+      const d = (t.values[col] ?? 0) - (b.values[col] ?? 0);
+      if (Math.abs(d) > CONFIG.epsilon) { deltas[col] = d; any = true; }
+    }
+    if (any) changed.push({ key: t.key, base: b, target: t, deltas });
+    else unchangedCount++;
+  }
+  for (const b of base.rows) {
+    if (!target.rows.some(t => t.key === b.key)) removed.push(b);
+  }
+  return { added, removed, changed, unchangedCount, numCols };
+}
+
+// グラフの Y 軸目盛り(1/2/5×10^n 刻み、0 を必ず含める)
+function niceTicks(min, max, count) {
+  if (min > 0) min = 0;
+  if (max < 0) max = 0;
+  if (min === max) max = min + 1;
+  const span = max - min;
+  const mag = Math.pow(10, Math.floor(Math.log10(span / count)));
+  const step = [1, 2, 5, 10].map(m => m * mag).find(s => span / s <= count) || 10 * mag;
+  const lo = Math.floor(min / step) * step;
+  const hi = Math.ceil(max / step) * step;
+  const ticks = [];
+  for (let v = lo; v <= hi + step / 2; v += step) ticks.push(Math.round(v * 1e6) / 1e6);
+  return { lo, hi, ticks };
+}
+
+/* ===================================================================== */
+/* PURE:END */
+/* ===================================================================== */
+
+/* ========== 6. chart(SVG 折れ線) ========== */
+const SVG_NS = "http://www.w3.org/2000/svg";
+function svgEl(tag, attrs, text) {
+  const el = document.createElementNS(SVG_NS, tag);
+  for (const [k, v] of Object.entries(attrs || {})) el.setAttribute(k, v);
+  if (text != null) el.textContent = text;
+  return el;
+}
+
+// container に折れ線グラフを描く。
+// opts: { xLabels: string[], series: [{label, color, values: (number|null)[]}],
+//         rotateXLabels?: bool, onPointClick?: (seriesLabel, xLabel, value) => void }
+function renderLineChart(container, opts) {
+  container.innerHTML = "";
+  const allVals = opts.series.flatMap(s => s.values).filter(v => v != null);
+  if (!allVals.length || !opts.xLabels.length) {
+    container.innerHTML = '<div class="empty-note">表示できるデータがありません</div>';
+    return;
+  }
+  const { lo, hi, ticks } = niceTicks(Math.min(...allVals), Math.max(...allVals), 5);
+  // 左マージンは Y 軸ラベルの最大桁数から決める(桁の多い金額でも見切れないように)
+  const maxTickLen = Math.max(...ticks.map(t => fmtNumber(t).length));
+  const W = 800, H = 420,
+        M = { t: 16, r: 16, b: opts.rotateXLabels ? 64 : 40, l: Math.max(48, 14 + maxTickLen * 6.6) };
+  const plotW = W - M.l - M.r, plotH = H - M.t - M.b;
+  const svg = svgEl("svg", { viewBox: `0 0 ${W} ${H}`, role: "img" });
+  const y = v => M.t + plotH * (1 - (v - lo) / (hi - lo));
+  const n = opts.xLabels.length;
+  const x = i => (n === 1 ? M.l + plotW / 2 : M.l + (plotW * i) / (n - 1));
+
+  // グリッドと Y 軸ラベル
+  for (const tv of ticks) {
+    svg.appendChild(svgEl("line", {
+      x1: M.l, x2: W - M.r, y1: y(tv), y2: y(tv),
+      class: tv === 0 ? "zeroline" : "gridline",
+    }));
+    svg.appendChild(svgEl("text", { x: M.l - 8, y: y(tv) + 4, "text-anchor": "end" }, fmtNumber(tv)));
+  }
+  // X 軸ラベル(多いときは間引き)
+  const step = Math.ceil(n / (opts.rotateXLabels ? 8 : 12));
+  for (let i = 0; i < n; i += step) {
+    const lbl = opts.xLabels[i];
+    const short = lbl.length > 14 ? lbl.slice(0, 13) + "…" : lbl;
+    const tx = x(i), ty = H - M.b + 18;
+    const attrs = opts.rotateXLabels
+      ? { x: tx, y: ty, "text-anchor": "end", transform: `rotate(-30 ${tx} ${ty})` }
+      : { x: tx, y: ty, "text-anchor": "middle" };
+    svg.appendChild(svgEl("text", attrs, short));
+  }
+  svg.appendChild(svgEl("line", { x1: M.l, x2: M.l, y1: M.t, y2: M.t + plotH, class: "axisline" }));
+
+  // 系列(欠損値では線を切る)
+  for (const s of opts.series) {
+    let seg = [];
+    const flush = () => {
+      if (seg.length > 1) {
+        svg.appendChild(svgEl("polyline", {
+          points: seg.map(([px, py]) => `${px},${py}`).join(" "),
+          fill: "none", stroke: s.color, "stroke-width": 2,
+          "stroke-linejoin": "round", "stroke-linecap": "round",
+        }));
+      }
+      seg = [];
+    };
+    s.values.forEach((v, i) => { if (v == null) flush(); else seg.push([x(i), y(v)]); });
+    flush();
+    s.values.forEach((v, i) => {
+      if (v == null) return;
+      const c = svgEl("circle", {
+        cx: x(i), cy: y(v), r: 4.5, fill: s.color,
+        stroke: "var(--surface)", "stroke-width": 2, class: "pt", tabindex: "0",
+      });
+      const title = svgEl("title", {}, `${s.label} ${opts.xLabels[i]}: ${fmtNumber(v)}`);
+      c.appendChild(title);
+      if (opts.onPointClick) {
+        c.addEventListener("click", () => opts.onPointClick(s.label, opts.xLabels[i], v));
+      }
+      svg.appendChild(c);
+    });
+  }
+  container.appendChild(svg);
+}
+
+/* ========== 7. views ========== */
+const $ = id => document.getElementById(id);
+
+const state = {
+  snapshots: [],
+  loadErrors: [],
+  tableView: { snapshotId: null, hiddenCols: new Set(), filterText: "", ymFrom: "", ymTo: "", sortKey: "__key", sortDir: 1 },
+  chartView: { mode: "timeline", snapshotId: null, yyyymm: "", metric: "", selected: new Set(), colorMap: new Map() },
+  compareView: { baseId: null, targetId: null, showUnchanged: false },
+};
+
+function getSnap(id) { return state.snapshots.find(s => s.id === id) || null; }
+
+// スナップショット横断のプロジェクト一覧 [{code, name}](コード昇順)
+function allProjects() {
+  const map = new Map();
+  for (const snap of state.snapshots) {
+    const nameCol = CONFIG.projectNameColumns.find(c => snap.columns.some(x => x.key === c && x.kind === "dim"));
+    for (const r of snap.rows) {
+      if (!map.has(r.projectCode)) {
+        map.set(r.projectCode, { code: r.projectCode, name: nameCol ? r.dims[nameCol] || "" : "" });
+      }
+    }
+  }
+  return [...map.values()].sort((a, b) => (a.code < b.code ? -1 : 1));
+}
+
+function projectLabel(p) { return p.name ? `${p.code} ${p.name}` : p.code; }
+
+function fillSelect(sel, options, current) {
+  sel.innerHTML = options.map(o =>
+    `<option value="${escapeHtml(o.value)}"${o.value === current ? " selected" : ""}>${escapeHtml(o.label)}</option>`).join("");
+}
+
+/* ---- 読込サマリー・断面チップ ---- */
+function renderLoader() {
+  $("chips").innerHTML = state.snapshots.map(s =>
+    `<span class="chip" data-id="${s.id}">` +
+    `<span class="chip-name" title="クリックで名前を変更">${escapeHtml(s.name)}</span>` +
+    `<button class="chip-x" title="この断面を削除" type="button">×</button></span>`).join("");
+  $("chips").querySelectorAll(".chip").forEach(chip => {
+    const id = chip.dataset.id;
+    chip.querySelector(".chip-name").addEventListener("click", () => {
+      const snap = getSnap(id);
+      const name = prompt("断面名を変更", snap.name);
+      if (name && name.trim()) { snap.name = name.trim(); refreshAll(); }
+    });
+    chip.querySelector(".chip-x").addEventListener("click", () => {
+      state.snapshots = state.snapshots.filter(s => s.id !== id);
+      refreshAll();
+    });
+  });
+
+  const items = state.snapshots.map(s => {
+    const merged = s.mergedKeyCount > 0 ? `、同一キー合算 ${s.mergedKeyCount} 件` : "";
+    const warn = s.warnings.length
+      ? ` <span class="warn-toggle" data-id="${s.id}">警告 ${s.warnings.length} 件</span>` +
+        `<ul class="warn-list hidden" id="warn-${s.id}">${s.warnings.map(w => `<li>${escapeHtml(w)}</li>`).join("")}</ul>`
+      : "";
+    return `<li><b>${escapeHtml(s.name)}</b> — ${s.format === "html" ? "偽xls(HTML表)" : "CSV"} / ${s.encoding} / ` +
+           `${s.rawRowCount} 行 → ${s.rows.length} 行${merged}${warn}</li>`;
+  });
+  const errs = state.loadErrors.map(e => `<li class="load-error">${escapeHtml(e)}</li>`);
+  $("loadSummary").innerHTML = items.length + errs.length
+    ? `<ul>${items.join("")}${errs.join("")}</ul>` : "";
+  $("loadSummary").querySelectorAll(".warn-toggle").forEach(el =>
+    el.addEventListener("click", () => $("warn-" + el.dataset.id).classList.toggle("hidden")));
+}
+
+/* ---- 全体表 ---- */
+function renderTableControls() {
+  const tv = state.tableView;
+  fillSelect($("tblSnapshot"), state.snapshots.map(s => ({ value: s.id, label: s.name })), tv.snapshotId);
+  const snap = getSnap(tv.snapshotId);
+  if (!snap) { $("tblColList").innerHTML = ""; fillSelect($("tblYmFrom"), [], ""); fillSelect($("tblYmTo"), [], ""); return; }
+
+  $("tblColList").innerHTML = snap.columns.map(c =>
+    `<label><input type="checkbox" data-col="${escapeHtml(c.key)}"${tv.hiddenCols.has(c.key) ? "" : " checked"}> ${escapeHtml(c.key)}</label>`).join("");
+  $("tblColList").querySelectorAll("input").forEach(cb =>
+    cb.addEventListener("change", () => {
+      if (cb.checked) tv.hiddenCols.delete(cb.dataset.col); else tv.hiddenCols.add(cb.dataset.col);
+      renderTable();
+    }));
+
+  const months = [...new Set(snap.rows.map(r => r.yyyymm))].sort();
+  const opts = [{ value: "", label: "指定なし" }, ...months.map(m => ({ value: m, label: m }))];
+  fillSelect($("tblYmFrom"), opts, tv.ymFrom);
+  fillSelect($("tblYmTo"), opts, tv.ymTo);
+}
+
+function filteredTableRows(snap) {
+  const tv = state.tableView;
+  const terms = tv.filterText.trim().toLowerCase().split(/[\s　]+/).filter(Boolean);
+  return snap.rows.filter(r => {
+    if (tv.ymFrom && r.yyyymm < tv.ymFrom) return false;
+    if (tv.ymTo && r.yyyymm > tv.ymTo) return false;
+    if (terms.length) {
+      const hay = (r.yyyymm + " " + r.projectCode + " " + Object.values(r.dims).join(" ")).toLowerCase();
+      if (!terms.every(t => hay.includes(t))) return false;
+    }
+    return true;
+  });
+}
+
+function renderTable() {
+  const tv = state.tableView;
+  const snap = getSnap(tv.snapshotId);
+  if (!snap) { $("tblBody").innerHTML = '<div class="empty-note">元帳ファイルを読み込んでください</div>'; $("tblCount").textContent = ""; return; }
+
+  const cols = snap.columns.filter(c => !tv.hiddenCols.has(c.key));
+  let rows = filteredTableRows(snap);
+
+  // ソート
+  const dir = tv.sortDir;
+  if (tv.sortKey === "__key") {
+    rows = [...rows].sort((a, b) => (a.key < b.key ? -dir : a.key > b.key ? dir : 0));
+  } else {
+    const col = snap.columns.find(c => c.key === tv.sortKey);
+    rows = [...rows].sort((a, b) => {
+      if (col && col.kind === "numeric") {
+        const av = a.values[col.key], bv = b.values[col.key];
+        if (av == null && bv == null) return 0;
+        if (av == null) return 1;
+        if (bv == null) return -1;
+        return (av - bv) * dir;
+      }
+      const av = col ? a.dims[col.key] || "" : "", bv = col ? b.dims[col.key] || "" : "";
+      return av < bv ? -dir : av > bv ? dir : 0;
+    });
+  }
+
+  const arrow = k => (tv.sortKey === k ? (dir === 1 ? " ▲" : " ▼") : "");
+  const headCells =
+    `<th class="k1" data-sort="__key">年月${arrow("__key")}</th>` +
+    `<th class="k2" data-sort="__key">ﾌﾟﾛｼﾞｪｸﾄｺｰﾄﾞ</th>` +
+    cols.map(c => `<th class="${c.kind === "numeric" ? "num" : ""}" data-sort="${escapeHtml(c.key)}">${escapeHtml(c.key)}${arrow(c.key)}</th>`).join("");
+
+  const bodyRows = rows.map(r => {
+    const merged = r.mergedCount > 1
+      ? `<span class="merged-mark" title="同一キーの ${r.mergedCount} 行を合算">×${r.mergedCount}</span>` : "";
+    const cells = cols.map(c => {
+      if (c.kind === "numeric") {
+        const v = r.values[c.key];
+        return `<td class="num${v != null && v < 0 ? " neg" : ""}">${fmtNumber(v)}</td>`;
+      }
+      return `<td>${escapeHtml(r.dims[c.key] ?? "")}</td>`;
+    }).join("");
+    return `<tr><td class="k1">${r.yyyymm}</td><td class="k2">${escapeHtml(r.projectCode)}${merged}</td>${cells}</tr>`;
+  }).join("");
+
+  // 小計行(フィルター後に表示されている行のみ・表示中の数値列のみ)
+  const footCells = cols.map(c => {
+    if (c.kind !== "numeric") return "<td></td>";
+    let sum = 0, has = false;
+    for (const r of rows) { const v = r.values[c.key]; if (v != null) { sum += v; has = true; } }
+    return `<td class="num${has && sum < 0 ? " neg" : ""}">${has ? fmtNumber(sum) : ""}</td>`;
+  }).join("");
+  const foot = `<tr><td class="k1">小計</td><td class="k2"></td>${footCells}</tr>`;
+
+  $("tblBody").innerHTML =
+    `<div class="tbl-scroll"><table class="data"><thead><tr>${headCells}</tr></thead>` +
+    `<tbody>${bodyRows || ""}</tbody><tfoot>${foot}</tfoot></table></div>` +
+    (rows.length ? "" : '<div class="empty-note">条件に合う行がありません</div>');
+  $("tblCount").textContent = `${rows.length} / ${snap.rows.length} 行を表示`;
+
+  $("tblBody").querySelectorAll("th[data-sort]").forEach(th =>
+    th.addEventListener("click", () => {
+      const k = th.dataset.sort;
+      if (tv.sortKey === k) tv.sortDir = -tv.sortDir;
+      else { tv.sortKey = k; tv.sortDir = 1; }
+      renderTable();
+    }));
+}
+
+/* ---- 推移グラフ ---- */
+function chartColorFor(code) {
+  const cv = state.chartView;
+  if (cv.colorMap.has(code)) return CONFIG.palette[cv.colorMap.get(code)];
+  const used = new Set(cv.colorMap.values());
+  for (let i = 0; i < CONFIG.palette.length; i++) {
+    if (!used.has(i)) { cv.colorMap.set(code, i); return CONFIG.palette[i]; }
+  }
+  return null; // maxSeries 超え(選択側で防止している)
+}
+
+function renderChartControls() {
+  const cv = state.chartView;
+  fillSelect($("chSnapshot"), state.snapshots.map(s => ({ value: s.id, label: s.name })), cv.snapshotId);
+
+  // 指標: 全断面の numeric 列の和集合
+  const metrics = [...new Set(state.snapshots.flatMap(s => s.columns.filter(c => c.kind === "numeric").map(c => c.key)))];
+  if (!metrics.includes(cv.metric)) cv.metric = metrics[0] || "";
+  fillSelect($("chMetric"), metrics.map(m => ({ value: m, label: m })), cv.metric);
+
+  // 年月(断面間モード用): 全断面の和集合
+  const months = [...new Set(state.snapshots.flatMap(s => s.rows.map(r => r.yyyymm)))].sort();
+  if (!months.includes(cv.yyyymm)) cv.yyyymm = months[months.length - 1] || "";
+  fillSelect($("chYm"), months.map(m => ({ value: m, label: m })), cv.yyyymm);
+
+  $("chSnapshotWrap").classList.toggle("hidden", cv.mode !== "timeline");
+  $("chYmWrap").classList.toggle("hidden", cv.mode !== "crossSnapshot");
+
+  // プロジェクト選択(チェックボックス+色ドット)
+  const projects = allProjects();
+  for (const code of [...cv.selected]) {
+    if (!projects.some(p => p.code === code)) { cv.selected.delete(code); cv.colorMap.delete(code); }
+  }
+  if (!cv.selected.size) {
+    projects.slice(0, Math.min(6, CONFIG.maxSeries)).forEach(p => { cv.selected.add(p.code); chartColorFor(p.code); });
+  }
+  $("chProjects").innerHTML = projects.map(p => {
+    const on = cv.selected.has(p.code);
+    const color = on ? chartColorFor(p.code) : "transparent";
+    return `<label class="checkline"><input type="checkbox" data-code="${escapeHtml(p.code)}"${on ? " checked" : ""}>` +
+      `<span class="dot" style="background:${color};border:1px solid ${on ? color : "var(--axis)"}"></span>${escapeHtml(projectLabel(p))}</label>`;
+  }).join("") + `<span class="note">最大 ${CONFIG.maxSeries} 系列</span>`;
+  $("chProjects").querySelectorAll("input").forEach(cb =>
+    cb.addEventListener("change", () => {
+      const code = cb.dataset.code;
+      if (cb.checked) {
+        if (cv.selected.size >= CONFIG.maxSeries) { cb.checked = false; return; }
+        cv.selected.add(code); chartColorFor(code);
+      } else {
+        cv.selected.delete(code); cv.colorMap.delete(code);
+      }
+      renderChartControls(); renderChart();
+    }));
+}
+
+function renderChart() {
+  const cv = state.chartView;
+  const box = $("chartBox"), legend = $("chartLegend");
+  legend.innerHTML = "";
+  if (!state.snapshots.length) { box.innerHTML = '<div class="empty-note">元帳ファイルを読み込んでください</div>'; return; }
+  if (!cv.metric || !cv.selected.size) { box.innerHTML = '<div class="empty-note">指標とプロジェクトを選択してください</div>'; return; }
+
+  const projects = allProjects().filter(p => cv.selected.has(p.code));
+  let xLabels, series, rotate = false;
+
+  if (cv.mode === "timeline") {
+    const snap = getSnap(cv.snapshotId);
+    if (!snap) { box.innerHTML = '<div class="empty-note">断面を選択してください</div>'; return; }
+    xLabels = [...new Set(snap.rows.map(r => r.yyyymm))].sort();
+    const byKey = new Map(snap.rows.map(r => [r.key, r]));
+    series = projects.map(p => ({
+      label: projectLabel(p), color: chartColorFor(p.code),
+      values: xLabels.map(m => byKey.get(`${m}|${p.code}`)?.values[cv.metric] ?? null),
+    }));
+  } else {
+    xLabels = state.snapshots.map(s => s.name);
+    rotate = true;
+    series = projects.map(p => ({
+      label: projectLabel(p), color: chartColorFor(p.code),
+      values: state.snapshots.map(s =>
+        s.rows.find(r => r.key === `${cv.yyyymm}|${p.code}`)?.values[cv.metric] ?? null),
+    }));
+  }
+
+  renderLineChart(box, {
+    xLabels, series, rotateXLabels: rotate,
+    onPointClick: (label, xLabel, v) =>
+      { $("chartReadout").textContent = `${label} — ${xLabel}: ${cv.metric} ${fmtNumber(v)}`; },
+  });
+  legend.innerHTML = series.map(s =>
+    `<span class="checkline"><span class="dot" style="background:${s.color}"></span>${escapeHtml(s.label)}</span>`).join("");
+}
+
+/* ---- 断面比較 ---- */
+function renderCompareControls() {
+  const cp = state.compareView;
+  const opts = state.snapshots.map(s => ({ value: s.id, label: s.name }));
+  fillSelect($("cmpBase"), opts, cp.baseId);
+  fillSelect($("cmpTarget"), opts, cp.targetId);
+  $("cmpShowUnchanged").checked = cp.showUnchanged;
+}
+
+function renderCompare() {
+  const cp = state.compareView;
+  const base = getSnap(cp.baseId), target = getSnap(cp.targetId);
+  if (!base || !target) {
+    $("cmpBody").innerHTML = '<div class="empty-note">断面を 2 つ以上読み込むと比較できます</div>';
+    $("cmpSummary").innerHTML = ""; return;
+  }
+  if (base.id === target.id) {
+    $("cmpBody").innerHTML = '<div class="empty-note">異なる断面を選択してください</div>';
+    $("cmpSummary").innerHTML = ""; return;
+  }
+
+  const diff = diffSnapshots(base, target);
+  $("cmpSummary").innerHTML =
+    `<span class="cmp-badge added">追加 ${diff.added.length}</span>` +
+    `<span class="cmp-badge removed">削除 ${diff.removed.length}</span>` +
+    `<span class="cmp-badge changed">変更 ${diff.changed.length}</span>` +
+    `<span class="cmp-badge">変化なし ${diff.unchangedCount}</span>`;
+
+  const nameCol = CONFIG.projectNameColumns.find(c => target.columns.some(x => x.key === c && x.kind === "dim"))
+               || CONFIG.projectNameColumns.find(c => base.columns.some(x => x.key === c && x.kind === "dim"));
+  const numCols = diff.numCols;
+
+  const head =
+    `<th>状態</th><th class="k1">年月</th><th class="k2">ﾌﾟﾛｼﾞｪｸﾄｺｰﾄﾞ</th>` +
+    (nameCol ? `<th>${escapeHtml(nameCol)}</th>` : "") +
+    numCols.map(c => `<th class="num">${escapeHtml(c)}</th>`).join("");
+
+  const deltaHtml = d => {
+    if (d == null || d === 0) return "";
+    const cls = d > 0 ? "up" : "down";
+    const sign = d > 0 ? "+" : "▲";
+    return `<span class="cmp-delta ${cls}">${sign}${fmtNumber(Math.abs(d))}</span>`;
+  };
+  const rowHtml = (cls, stateLabel, row, cellFn) =>
+    `<tr class="${cls}"><td class="state-cell">${stateLabel}</td>` +
+    `<td class="k1">${row.yyyymm}</td><td class="k2">${escapeHtml(row.projectCode)}</td>` +
+    (nameCol ? `<td>${escapeHtml(row.dims?.[nameCol] ?? "")}</td>` : "") +
+    numCols.map(cellFn).join("") + "</tr>";
+
+  const entries = [];
+  for (const t of diff.added) {
+    entries.push({ key: t.key, html: rowHtml("row-added", "追加", t,
+      c => `<td class="num">${fmtNumber(t.values[c])}</td>`) });
+  }
+  for (const b of diff.removed) {
+    entries.push({ key: b.key, html: rowHtml("row-removed", "削除", b,
+      c => `<td class="num">${fmtNumber(b.values[c])}</td>`) });
+  }
+  for (const ch of diff.changed) {
+    entries.push({ key: ch.key, html: rowHtml("row-changed", "変更", ch.target,
+      c => `<td class="num${ch.deltas[c] ? " changed-cell" : ""}" ${ch.deltas[c] ? `style="background:var(--changed-bg)"` : ""}>` +
+           `${fmtNumber(ch.target.values[c])}${deltaHtml(ch.deltas[c])}</td>`) });
+  }
+  if (cp.showUnchanged) {
+    const changedKeys = new Set(entries.map(e => e.key));
+    for (const t of target.rows) {
+      if (!changedKeys.has(t.key)) {
+        entries.push({ key: t.key, html: rowHtml("", "", t,
+          c => `<td class="num">${fmtNumber(t.values[c])}</td>`) });
+      }
+    }
+  }
+  entries.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
+
+  $("cmpBody").innerHTML = entries.length
+    ? `<div class="tbl-scroll"><table class="data"><thead><tr>${head}</tr></thead>` +
+      `<tbody>${entries.map(e => e.html).join("")}</tbody></table></div>` +
+      `<p class="note">「${escapeHtml(base.name)}」→「${escapeHtml(target.name)}」の変化。増減は base との差(+ 増 / ▲ 減)</p>`
+    : '<div class="empty-note">2 断面に差はありません</div>';
+}
+
+/* ========== 8. app ========== */
+function refreshAll() {
+  const snaps = state.snapshots;
+  // デフォルト選択の補正
+  if (!getSnap(state.tableView.snapshotId)) state.tableView.snapshotId = snaps.at(-1)?.id ?? null;
+  if (!getSnap(state.chartView.snapshotId)) state.chartView.snapshotId = snaps.at(-1)?.id ?? null;
+  if (!getSnap(state.compareView.targetId)) state.compareView.targetId = snaps.at(-1)?.id ?? null;
+  if (!getSnap(state.compareView.baseId) || state.compareView.baseId === state.compareView.targetId) {
+    state.compareView.baseId = snaps.length >= 2 ? snaps.at(-2).id : (snaps.at(-1)?.id ?? null);
+  }
+  renderLoader();
+  renderTableControls(); renderTable();
+  renderChartControls(); renderChart();
+  renderCompareControls(); renderCompare();
+}
+
+async function handleFiles(fileList) {
+  for (const file of fileList) {
+    try {
+      const buf = await file.arrayBuffer();
+      const { text, encoding } = decodeBytes(buf);
+      loadText(text, { name: file.name, encoding });
+    } catch (e) {
+      state.loadErrors.push(`${file.name}: ${e.message}`);
+    }
+  }
+  refreshAll();
+}
+
+function loadText(text, meta) {
+  try {
+    const format = sniffFormat(text);
+    let grid, extraWarnings = [];
+    if (format === "html") {
+      const parsed = parseHtmlTable(text);
+      grid = parsed.grid; extraWarnings = parsed.warnings;
+    } else {
+      grid = parseCsv(text);
+    }
+    state.snapshots.push(normalizeSnapshot(grid, { ...meta, format }, extraWarnings));
+  } catch (e) {
+    state.loadErrors.push(`${meta.name}: ${e.message}`);
+  }
+}
+
+function init() {
+  $("fileInput").addEventListener("change", e => { handleFiles([...e.target.files]); e.target.value = ""; });
+
+  const dz = $("dropzone");
+  dz.addEventListener("dragover", e => { e.preventDefault(); dz.classList.add("dragover"); });
+  dz.addEventListener("dragleave", () => dz.classList.remove("dragover"));
+  dz.addEventListener("drop", e => {
+    e.preventDefault(); dz.classList.remove("dragover");
+    handleFiles([...e.dataTransfer.files]);
+  });
+
+  $("demoBtn").addEventListener("click", () => {
+    loadText(DEMO_CSV_A, { name: "デモ断面A(202506締め)", encoding: "内蔵" });
+    loadText(DEMO_CSV_B, { name: "デモ断面B(202507締め)", encoding: "内蔵" });
+    refreshAll();
+  });
+
+  $("tabs").querySelectorAll(".tab").forEach(btn =>
+    btn.addEventListener("click", () => {
+      $("tabs").querySelectorAll(".tab").forEach(b => b.classList.toggle("active", b === btn));
+      for (const v of ["table", "chart", "compare"]) {
+        $("view-" + v).classList.toggle("hidden", v !== btn.dataset.view);
+      }
+    }));
+
+  $("tblSnapshot").addEventListener("change", e => {
+    state.tableView.snapshotId = e.target.value; renderTableControls(); renderTable();
+  });
+  $("tblFilter").addEventListener("input", e => { state.tableView.filterText = e.target.value; renderTable(); });
+  $("tblYmFrom").addEventListener("change", e => { state.tableView.ymFrom = e.target.value; renderTable(); });
+  $("tblYmTo").addEventListener("change", e => { state.tableView.ymTo = e.target.value; renderTable(); });
+
+  $("chMode").addEventListener("change", e => { state.chartView.mode = e.target.value; renderChartControls(); renderChart(); });
+  $("chSnapshot").addEventListener("change", e => { state.chartView.snapshotId = e.target.value; renderChart(); });
+  $("chYm").addEventListener("change", e => { state.chartView.yyyymm = e.target.value; renderChart(); });
+  $("chMetric").addEventListener("change", e => { state.chartView.metric = e.target.value; renderChart(); });
+
+  $("cmpBase").addEventListener("change", e => { state.compareView.baseId = e.target.value; renderCompare(); });
+  $("cmpTarget").addEventListener("change", e => { state.compareView.targetId = e.target.value; renderCompare(); });
+  $("cmpShowUnchanged").addEventListener("change", e => { state.compareView.showUnchanged = e.target.checked; renderCompare(); });
+
+  refreshAll();
+}
+
+/* ---- 組み込みデモデータ(sample-data/generate_dummy.py の出力と同内容) ---- */
+const DEMO_CSV_A = `年月,プロジェクトコード,プロジェクト名,部門,売上高,売上原価,販管費,営業利益
+202501,P001,基幹システム刷新,開発部,28800000,16061000,468000,12271000
+202501,P002,髙島商事向け導入支援,営業1部,11510000,7383000,308000,3819000
+202501,P003,データ分析基盤構築,開発部,26520000,18330000,766000,7424000
+202501,P004,"クラウド移行支援(設計,構築)",営業2部,21980000,12457000,917000,8606000
+202501,P005,保守運用サービス,営業1部,13860000,7962000,1243000,4655000
+202501,Z999,販売費および一般管理費,本社,0,0,7911000,-7911000
+202501,Z999,販売費および一般管理費,共通,0,0,5275000,-5275000
+202502,P001,基幹システム刷新,開発部,20340000,12034000,1042000,7264000
+202502,P002,髙島商事向け導入支援,営業1部,23980000,18483000,312000,5185000
+202502,P003,データ分析基盤構築,開発部,8740000,5647000,546000,2547000
+202502,P004,"クラウド移行支援(設計,構築)",営業2部,13740000,7881000,307000,5552000
+202502,P005,保守運用サービス,営業1部,20660000,11852000,434000,8374000
+202502,Z999,販売費および一般管理費,本社,0,0,6447000,-6447000
+202502,Z999,販売費および一般管理費,共通,0,0,4299000,-4299000
+202503,P001,基幹システム刷新,開発部,11210000,7449000,1222000,2539000
+202503,P002,髙島商事向け導入支援,営業1部,24770000,18551000,626000,5593000
+202503,P003,データ分析基盤構築,開発部,22950000,17955000,487000,4508000
+202503,P004,"クラウド移行支援(設計,構築)",営業2部,15210000,9449000,764000,4997000
+202503,P005,保守運用サービス,営業1部,18720000,14134000,1443000,3143000
+202503,Z999,販売費および一般管理費,本社,0,0,7926000,-7926000
+202503,Z999,販売費および一般管理費,共通,0,0,5285000,-5285000
+202504,P001,基幹システム刷新,開発部,18940000,12858000,528000,5554000
+202504,P002,髙島商事向け導入支援,営業1部,26580000,15290000,491000,10799000
+202504,P003,データ分析基盤構築,開発部,29620000,18897000,543000,10180000
+202504,P004,"クラウド移行支援(設計,構築)",営業2部,14670000,10522000,482000,3666000
+202504,P005,保守運用サービス,営業1部,16930000,11032000,352000,5546000
+202504,Z999,販売費および一般管理費,本社,0,0,8305000,-8305000
+202504,Z999,販売費および一般管理費,共通,0,0,5538000,-5538000
+202505,P001,基幹システム刷新,開発部,26690000,17741000,1355000,7594000
+202505,P002,髙島商事向け導入支援,営業1部,17180000,12031000,1380000,3769000
+202505,P003,データ分析基盤構築,開発部,23700000,15482000,372000,7846000
+202505,P004,"クラウド移行支援(設計,構築)",営業2部,21270000,13846000,601000,6823000
+202505,P005,保守運用サービス,営業1部,25450000,14831000,1060000,9559000
+202505,Z999,販売費および一般管理費,本社,0,0,7336000,-7336000
+202505,Z999,販売費および一般管理費,共通,0,0,4891000,-4891000
+202506,P001,基幹システム刷新,開発部,27610000,16097000,1058000,10455000
+202506,P002,髙島商事向け導入支援,営業1部,18700000,14043000,815000,3842000
+202506,P003,データ分析基盤構築,開発部,13480000,9946000,545000,2989000
+202506,P004,"クラウド移行支援(設計,構築)",営業2部,30000000,21366000,1431000,7203000
+202506,P005,保守運用サービス,営業1部,11420000,6763000,1239000,3418000
+202506,Z999,販売費および一般管理費,本社,0,0,8097000,-8097000
+202506,Z999,販売費および一般管理費,共通,0,0,5398000,-5398000
+`;
+const DEMO_CSV_B = `年月,プロジェクトコード,プロジェクト名,部門,売上高,売上原価,販管費,営業利益
+202501,P001,基幹システム刷新,開発部,28800000,16061000,468000,12271000
+202501,P002,髙島商事向け導入支援,営業1部,11510000,7383000,308000,3819000
+202501,P003,データ分析基盤構築,開発部,26520000,18330000,766000,7424000
+202501,P004,"クラウド移行支援(設計,構築)",営業2部,21980000,12457000,917000,8606000
+202501,P005,保守運用サービス,営業1部,13860000,7962000,1243000,4655000
+202501,Z999,販売費および一般管理費,本社,0,0,7911000,-7911000
+202501,Z999,販売費および一般管理費,共通,0,0,5275000,-5275000
+202502,P001,基幹システム刷新,開発部,20340000,12034000,1042000,7264000
+202502,P002,髙島商事向け導入支援,営業1部,23980000,18483000,312000,5185000
+202502,P003,データ分析基盤構築,開発部,8740000,5647000,546000,2547000
+202502,P004,"クラウド移行支援(設計,構築)",営業2部,13740000,7881000,307000,5552000
+202502,P005,保守運用サービス,営業1部,20660000,11852000,434000,8374000
+202502,Z999,販売費および一般管理費,本社,0,0,6447000,-6447000
+202502,Z999,販売費および一般管理費,共通,0,0,4299000,-4299000
+202503,P001,基幹システム刷新,開発部,11210000,7449000,1222000,2539000
+202503,P002,髙島商事向け導入支援,営業1部,24770000,18551000,626000,5593000
+202503,P003,データ分析基盤構築,開発部,22950000,17955000,487000,4508000
+202503,P004,"クラウド移行支援(設計,構築)",営業2部,15210000,9449000,764000,4997000
+202503,P005,保守運用サービス,営業1部,18720000,14134000,1443000,3143000
+202503,Z999,販売費および一般管理費,本社,0,0,7926000,-7926000
+202503,Z999,販売費および一般管理費,共通,0,0,5285000,-5285000
+202504,P001,基幹システム刷新,開発部,18940000,12858000,528000,5554000
+202504,P002,髙島商事向け導入支援,営業1部,27780000,15290000,491000,11999000
+202504,P003,データ分析基盤構築,開発部,29620000,18897000,543000,10180000
+202504,P004,"クラウド移行支援(設計,構築)",営業2部,14670000,10522000,482000,3666000
+202504,P005,保守運用サービス,営業1部,16930000,11032000,352000,5546000
+202504,Z999,販売費および一般管理費,本社,0,0,8305000,-8305000
+202504,Z999,販売費および一般管理費,共通,0,0,5538000,-5538000
+202505,P001,基幹システム刷新,開発部,26690000,17741000,1355000,7594000
+202505,P002,髙島商事向け導入支援,営業1部,17180000,12031000,1380000,3769000
+202505,P003,データ分析基盤構築,開発部,23700000,15482000,372000,7846000
+202505,P004,"クラウド移行支援(設計,構築)",営業2部,21270000,13846000,601000,6823000
+202505,P005,保守運用サービス,営業1部,25450000,14831000,1060000,9559000
+202505,Z999,販売費および一般管理費,本社,0,0,7336000,-7336000
+202505,Z999,販売費および一般管理費,共通,0,0,4891000,-4891000
+202506,P001,基幹システム刷新,開発部,27610000,16097000,1058000,10455000
+202506,P002,髙島商事向け導入支援,営業1部,18700000,14043000,815000,3842000
+202506,P003,データ分析基盤構築,開発部,13480000,9946000,545000,2989000
+202506,P004,"クラウド移行支援(設計,構築)",営業2部,30000000,21366000,1431000,7203000
+202506,P006,新規SaaS立ち上げ,営業2部,9730000,7760000,978000,992000
+202506,Z999,販売費および一般管理費,本社,0,0,8097000,-8097000
+202506,Z999,販売費および一般管理費,共通,0,0,5398000,-5398000
+202507,P001,基幹システム刷新,開発部,14220000,10822000,1455000,1943000
+202507,P002,髙島商事向け導入支援,営業1部,16780000,10933000,591000,5256000
+202507,P003,データ分析基盤構築,開発部,9060000,6003000,527000,2530000
+202507,P004,"クラウド移行支援(設計,構築)",営業2部,19960000,13727000,1475000,4758000
+202507,P006,新規SaaS立ち上げ,営業2部,27690000,20382000,349000,6959000
+202507,Z999,販売費および一般管理費,本社,0,0,5511000,-5511000
+202507,Z999,販売費および一般管理費,共通,0,0,3674000,-3674000
+`;
+
+init();
+</script>
+</body>
+</html>
