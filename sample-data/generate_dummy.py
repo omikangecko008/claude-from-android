@@ -9,6 +9,11 @@
   ledger_202506締め_utf8.csv 断面Aと同内容、UTF-8(エンコード判定の検証用)
   ledger_202507締め.xls      断面Bと同内容、実体はHTML(偽xls)。
                              数値はカンマ区切り・負数は△表記(数値クリーニングの検証用)
+  ledger_202507締め_A事業.csv   断面Bのうち販管費(Z999)以外の行、CP932
+  ledger_202507締め_B販管費.csv 断面Bのうち販管費(Z999)の行のみ+末尾に「販管費計」列、CP932
+                             → 「複数ファイルを1断面に結合」機能の検証用。
+                               A + B を結合すると ledger_202507締め.csv と同一の断面になる
+                               (販管費計は CONFIG.ignoredColumns の検証用の余分な小計列)
 
 断面Aに対する断面Bの差分(比較表の検証用。件数は既知):
   added   7件: 202507 の全行(P001〜P004, P006, Z999)+ P006 の 202506(過去月への追加)
@@ -99,8 +104,8 @@ def csv_field(v):
     return s
 
 
-def write_csv(path, rows, encoding):
-    lines = [",".join(csv_field(v) for v in row) for row in [HEADER] + rows]
+def write_csv(path, rows, encoding, header=HEADER):
+    lines = [",".join(csv_field(v) for v in row) for row in [header] + rows]
     path.write_bytes(("\r\n".join(lines) + "\r\n").encode(encoding))
     print(f"  {path.name}  ({encoding}, {len(rows)}行)")
 
@@ -135,6 +140,14 @@ def main():
     write_csv(OUT_DIR / "ledger_202506締め_utf8.csv", a, "utf-8")
     write_csv(OUT_DIR / "ledger_202507締め.csv", b, "cp932")
     write_fake_xls(OUT_DIR / "ledger_202507締め.xls", b)
+
+    # 断面Bの A/B 分割版(結合読み込みの検証用)。A=事業プロジェクト、B=販管費のみ。
+    # B側は業務システムにありがちな冗長列「販管費計」(販管費と同値の小計)を末尾に持つ
+    a_rows = [r for r in b if r[1] != SGA_CODE]
+    z_rows = [r + [r[6]] for r in b if r[1] == SGA_CODE]
+    write_csv(OUT_DIR / "ledger_202507締め_A事業.csv", a_rows, "cp932")
+    write_csv(OUT_DIR / "ledger_202507締め_B販管費.csv", z_rows, "cp932",
+              header=HEADER + ["販管費計"])
 
     # 差分の答え合わせ(比較表の検証で使う既知件数)
     key = lambda r: f"{r[0]}|{r[1]}"

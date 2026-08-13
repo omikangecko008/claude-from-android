@@ -25,8 +25,9 @@
   --grid:#e1e0d9; --axis:#c3c2b7; --border:rgba(11,11,11,.10);
   --accent:#2a78d6; --accent-deep:#1c5cab;
   --up:#1c5cab; --down:#d03b3b;
-  --added-bg:rgba(12,163,12,.10); --removed-bg:rgba(137,135,129,.14);
-  --changed-bg:rgba(42,120,214,.07); --hover-bg:rgba(42,120,214,.06);
+  /* 行の状態色は必ず不透明にする(半透明だと固定列のセルが透けて横スクロール時に重なって見える) */
+  --added-bg:#e4f3e3; --removed-bg:#ecebea;
+  --changed-bg:#edf3f8; --hover-bg:#eff4f9;
 }
 *{box-sizing:border-box}
 html,body{margin:0;padding:0}
@@ -113,27 +114,37 @@ table.data thead th{
 }
 table.data thead th.num{text-align:right}
 table.data td.num{text-align:right;font-variant-numeric:tabular-nums}
-table.data .k1{position:sticky;left:0;z-index:1;min-width:4.8em}
-table.data .k2{position:sticky;left:4.8em;z-index:1}
-table.data thead .k1,table.data thead .k2{z-index:3}
+/* 固定列(左端からN列)。left は描画後に実測してJSが設定する */
+table.data .fz{position:sticky;z-index:1}
+table.data thead .fz{z-index:3}
+table.data .fz-last{border-right:1.5px solid var(--axis)}
+table.data td.fz-dim{max-width:11em;overflow:hidden;text-overflow:ellipsis}
 table.data tbody tr:hover td{background:var(--hover-bg)}
 table.data tfoot td{
   position:sticky;bottom:0;border-top:1.5px solid var(--axis);border-bottom:none;
   font-weight:600;background:var(--page);
 }
-table.data tfoot .k1,table.data tfoot .k2{background:var(--page)}
 .merged-mark{color:var(--accent);cursor:help;font-size:11px;vertical-align:super}
 .neg{color:var(--down)}
 
 /* ---- 比較表 ---- */
-.cmp-summary{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px;font-size:12px}
-.cmp-badge{border-radius:12px;padding:2px 10px;border:1px solid var(--border)}
+.cmp-summary{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:8px;font-size:12px}
+.cmp-badge{
+  border-radius:12px;padding:2px 10px;border:1px solid var(--border);
+  cursor:pointer;user-select:none;background:none;font-size:12px;color:var(--ink);
+}
 .cmp-badge.added{background:var(--added-bg)}
 .cmp-badge.removed{background:var(--removed-bg)}
 .cmp-badge.changed{background:var(--changed-bg)}
+.cmp-badge.unchanged{background:var(--page)}
+.cmp-badge.off{background:transparent;color:var(--muted);border-style:dashed;text-decoration:line-through}
+#cmpAgg{margin-bottom:10px}
+#cmpAgg table.data{width:auto;min-width:320px}
+#cmpAgg .tbl-scroll{max-height:none}
 tr.row-added td{background:var(--added-bg)}
 tr.row-removed td{background:var(--removed-bg);color:var(--ink-2)}
 tr.row-removed td.num{text-decoration:line-through}
+table.data td.chg{background:var(--changed-bg)}
 .cmp-delta{font-size:11px;display:block}
 .cmp-delta.up{color:var(--up)}
 .cmp-delta.down{color:var(--down)}
@@ -169,6 +180,9 @@ svg .pt{cursor:pointer}
       <label class="btn btn-primary" for="fileInput">ファイルを選択</label>
       <input type="file" id="fileInput" multiple accept=".csv,.xls,.xlsx,.txt,.html,text/csv,text/html">
       <button class="btn" id="demoBtn" type="button">デモデータを読み込む</button>
+      <label class="checkline" title="事業元帳+販管費元帳のように分かれたファイルを合算して1断面として読む">
+        <input type="checkbox" id="mergeLoad">複数ファイルを1断面に結合
+      </label>
       <div class="dropzone" id="dropzone">ここに元帳ファイルをドラッグ&ドロップ(複数可。1ファイル = 1断面)</div>
     </div>
     <div class="chips" id="chips"></div>
@@ -191,6 +205,7 @@ svg .pt{cursor:pointer}
       </details>
       <label>絞り込み <input type="text" id="tblFilter" placeholder="コード・名称など(スペース区切りAND)"></label>
       <label>年月 <select id="tblYmFrom"></select> 〜 <select id="tblYmTo"></select></label>
+      <label title="横スクロール時に左端から何列を固定表示するか">固定列 <select id="tblFrozen"></select></label>
       <span class="note" id="tblCount"></span>
     </div>
     <div id="tblBody"></div>
@@ -220,9 +235,17 @@ svg .pt{cursor:pointer}
     <div class="controls">
       <label>前回(base) <select id="cmpBase"></select></label>
       <label>今回(target) <select id="cmpTarget"></select></label>
-      <label class="checkline"><input type="checkbox" id="cmpShowUnchanged">変化のない行も表示</label>
+      <details class="colsel" id="cmpColSel">
+        <summary>表示列</summary>
+        <div class="colsel-pop" id="cmpColList"></div>
+      </details>
+      <label>絞り込み <input type="text" id="cmpFilter" placeholder="コード・名称など(スペース区切りAND)"></label>
+      <label>年月 <select id="cmpYmFrom"></select> 〜 <select id="cmpYmTo"></select></label>
+      <label title="横スクロール時に左端から何列を固定表示するか">固定列 <select id="cmpFrozen"></select></label>
+      <span class="note" id="cmpCount"></span>
     </div>
     <div class="cmp-summary" id="cmpSummary"></div>
+    <div id="cmpAgg"></div>
     <div id="cmpBody"></div>
   </section>
 </div>
@@ -242,6 +265,10 @@ const CONFIG = {
   },
   // プロジェクト名として表示に使う列の候補(なければコードのみ表示)
   projectNameColumns: ["プロジェクト名", "プロジェクト名称", "PJ名", "案件名", "名称"],
+  // 数値に見えても文字列(dim)として扱う列名(コード・番号類)。自動判定より優先
+  forceDimColumns: [],   // 例: ["部門コード", "社員番号"]
+  // 取り込み時に列ごと無視する列名(元帳B内の小計列「販管費計」など)
+  ignoredColumns: [],    // 例: ["販管費計"]
   // 非空値のうちこの割合以上が数値として解釈できれば numeric 列とみなす
   numericThreshold: 0.9,
   // 断面比較で「変化あり」とみなす差の閾値(浮動小数の誤差吸収)
@@ -401,19 +428,31 @@ function normalizeSnapshot(grid, meta, extraWarnings) {
   const body = grid.slice(1);
 
   // キー列以外の列種別を判定(非空値の 90% 以上が数値なら numeric)
-  const columns = [];
+  // CONFIG.ignoredColumns は列ごと捨て、CONFIG.forceDimColumns は自動判定より優先で dim 扱い
+  const nameIn = list => key => list.some(c => c.toLowerCase() === key.toLowerCase());
+  const isIgnored = nameIn(CONFIG.ignoredColumns), isForceDim = nameIn(CONFIG.forceDimColumns);
+  const columns = [], ignored = [];
   header.forEach((key, idx) => {
     if (idx === iYm || idx === iPj) return;
-    let nonEmpty = 0, numeric = 0;
-    for (const r of body) {
-      const v = String(r[idx] ?? "").trim();
-      if (v === "") continue;
-      nonEmpty++;
-      if (parseNumber(v) != null) numeric++;
+    if (isIgnored(key)) { ignored.push(key); return; }
+    let kind;
+    if (isForceDim(key)) {
+      kind = "dim";
+    } else {
+      let nonEmpty = 0, numeric = 0;
+      for (const r of body) {
+        const v = String(r[idx] ?? "").trim();
+        if (v === "") continue;
+        nonEmpty++;
+        if (parseNumber(v) != null) numeric++;
+      }
+      kind = nonEmpty > 0 && numeric / nonEmpty >= CONFIG.numericThreshold ? "numeric" : "dim";
     }
-    const kind = nonEmpty > 0 && numeric / nonEmpty >= CONFIG.numericThreshold ? "numeric" : "dim";
     columns.push({ key, kind, index: idx });
   });
+  if (ignored.length) {
+    warnings.push(`列「${ignored.join("」「")}」は CONFIG.ignoredColumns の指定により無視しました`);
+  }
 
   // 行の正規化
   const rawRows = [];
@@ -438,9 +477,46 @@ function normalizeSnapshot(grid, meta, extraWarnings) {
   return {
     id: "s" + (++_snapSeq),
     name: meta.name, format: meta.format, encoding: meta.encoding,
+    parts: meta.parts || null,   // 結合読み込み時のファイル内訳(表示用)
     columns: columns.map(({ key, kind }) => ({ key, kind })),
     rows, warnings,
     rawRowCount: rawRows.length, mergedKeyCount,
+  };
+}
+
+// 複数ファイルの grid を 1 つに連結する(結合読み込み用)。
+// ヘッダーは和集合(先頭ファイルの列順を優先し、以降のファイルの新規列は末尾に追加)。
+// 連結後に normalizeSnapshot へ通せば、ファイル跨ぎの同一キー行は既存の合算ルールで統合される。
+function mergeGrids(grids) {
+  const header = [];
+  for (const g of grids) {
+    if (!g || !g.length) throw new Error("空の表データは結合できません");
+    for (const h of g[0].map(x => String(x).trim())) if (!header.includes(h)) header.push(h);
+  }
+  const out = [header];
+  for (const g of grids) {
+    const idx = g[0].map(h => header.indexOf(String(h).trim()));
+    for (const row of g.slice(1)) {
+      const r = new Array(header.length).fill("");
+      row.forEach((v, i) => { if (idx[i] >= 0) r[idx[i]] = v; });
+      out.push(r);
+    }
+  }
+  return out;
+}
+
+// 行フィルターの述語を作る(全体表・断面比較で共用)。
+// filterText はスペース区切り AND(キー・dim 値への部分一致)、ymFrom/ymTo は年月範囲(空 = 指定なし)
+function makeRowFilter(filterText, ymFrom, ymTo) {
+  const terms = String(filterText || "").trim().toLowerCase().split(/[\s　]+/).filter(Boolean);
+  return row => {
+    if (ymFrom && row.yyyymm < ymFrom) return false;
+    if (ymTo && row.yyyymm > ymTo) return false;
+    if (terms.length) {
+      const hay = (row.yyyymm + " " + row.projectCode + " " + Object.values(row.dims).join(" ")).toLowerCase();
+      if (!terms.every(t => hay.includes(t))) return false;
+    }
+    return true;
   };
 }
 
@@ -475,8 +551,7 @@ function diffSnapshots(base, target) {
     .filter(c => c.kind === "numeric" && base.columns.some(b => b.key === c.key && b.kind === "numeric"))
     .map(c => c.key);
   const bMap = new Map(base.rows.map(r => [r.key, r]));
-  const added = [], removed = [], changed = [];
-  let unchangedCount = 0;
+  const added = [], removed = [], changed = [], unchanged = [];
   for (const t of target.rows) {
     const b = bMap.get(t.key);
     if (!b) { added.push(t); continue; }
@@ -487,12 +562,35 @@ function diffSnapshots(base, target) {
       if (Math.abs(d) > CONFIG.epsilon) { deltas[col] = d; any = true; }
     }
     if (any) changed.push({ key: t.key, base: b, target: t, deltas });
-    else unchangedCount++;
+    else unchanged.push({ key: t.key, base: b, target: t });
   }
   for (const b of base.rows) {
     if (!target.rows.some(t => t.key === b.key)) removed.push(b);
   }
-  return { added, removed, changed, unchangedCount, numCols };
+  return { added, removed, changed, unchanged, unchangedCount: unchanged.length, numCols };
+}
+
+// diffSnapshots の結果を状態付きの統一エントリ列(キー昇順)に変換する。
+// entry = { state, key, base|null, target|null, deltas? }
+function compareEntries(diff) {
+  const entries = [];
+  for (const t of diff.added) entries.push({ state: "added", key: t.key, base: null, target: t });
+  for (const b of diff.removed) entries.push({ state: "removed", key: b.key, base: b, target: null });
+  for (const c of diff.changed) entries.push({ state: "changed", key: c.key, base: c.base, target: c.target, deltas: c.deltas });
+  for (const u of diff.unchanged) entries.push({ state: "unchanged", key: u.key, base: u.base, target: u.target });
+  return entries.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
+}
+
+// サマリ表用の集計: 各数値列について base 側合計・target 側合計・差分を出す
+function summarizeCompare(entries, numCols) {
+  return numCols.map(col => {
+    let base = 0, target = 0;
+    for (const e of entries) {
+      if (e.base) base += e.base.values[col] ?? 0;
+      if (e.target) target += e.target.values[col] ?? 0;
+    }
+    return { col, base, target, delta: target - base };
+  });
 }
 
 // グラフの Y 軸目盛り(1/2/5×10^n 刻み、0 を必ず含める)
@@ -603,12 +701,57 @@ const $ = id => document.getElementById(id);
 const state = {
   snapshots: [],
   loadErrors: [],
-  tableView: { snapshotId: null, hiddenCols: new Set(), filterText: "", ymFrom: "", ymTo: "", sortKey: "__key", sortDir: 1 },
+  tableView: { snapshotId: null, hiddenCols: new Set(), filterText: "", ymFrom: "", ymTo: "", sortKey: "__key", sortDir: 1, frozenCount: 2 },
   chartView: { mode: "timeline", snapshotId: null, yyyymm: "", metric: "", selected: new Set(), colorMap: new Map() },
-  compareView: { baseId: null, targetId: null, showUnchanged: false },
+  compareView: {
+    baseId: null, targetId: null,
+    activeStates: new Set(["added", "removed", "changed"]),   // 「変化なし」は初期オフ
+    hiddenCols: new Set(), filterText: "", ymFrom: "", ymTo: "", frozenCount: 4,
+  },
 };
 
 function getSnap(id) { return state.snapshots.find(s => s.id === id) || null; }
+
+/* ---- 固定列(左端からN列を sticky に) ---- */
+const FROZEN_CHOICES = [0, 1, 2, 3, 4, 5, 6].map(n => ({ value: String(n), label: n === 0 ? "なし" : `${n}列` }));
+
+// スマホ幅では固定列が画面を圧迫するため最大2列に制限
+function frozenLimit(n) {
+  return Math.min(n, window.innerWidth <= 640 ? 2 : 6);
+}
+
+// セルの class 文字列を作る(i 列目が固定範囲なら fz を付与)
+function fzClass(i, nFz, extra) {
+  let cls = extra || "";
+  if (i < nFz) cls += (cls ? " " : "") + "fz" + (i === nFz - 1 ? " fz-last" : "");
+  return cls;
+}
+
+// 描画後に thead のセル幅を実測し、fz セルの left を設定する。
+// 実測方式なので列構成・フォントサイズが変わっても決め打ち不要で追従する。
+function positionStickyColumns(scrollEl) {
+  const table = scrollEl && scrollEl.querySelector("table");
+  if (!table || !table.tHead || !table.tHead.rows.length) return;
+  const lefts = [];
+  let acc = 0;
+  for (const cell of table.tHead.rows[0].cells) {
+    if (!cell.classList.contains("fz")) break;
+    lefts.push(acc);
+    acc += cell.getBoundingClientRect().width;
+  }
+  if (!lefts.length) return;
+  for (const row of table.rows) {
+    for (let i = 0; i < lefts.length && i < row.cells.length; i++) {
+      row.cells[i].style.left = lefts[i] + "px";
+    }
+  }
+}
+
+function repositionAllSticky() {
+  for (const id of ["tblBody", "cmpBody", "cmpAgg"]) {
+    positionStickyColumns($(id).querySelector(".tbl-scroll"));
+  }
+}
 
 // スナップショット横断のプロジェクト一覧 [{code, name}](コード昇順)
 function allProjects() {
@@ -650,14 +793,20 @@ function renderLoader() {
     });
   });
 
+  const fmtLabel = f => (f === "html" ? "偽xls(HTML表)" : f === "merged" ? "結合" : "CSV");
   const items = state.snapshots.map(s => {
     const merged = s.mergedKeyCount > 0 ? `、同一キー合算 ${s.mergedKeyCount} 件` : "";
     const warn = s.warnings.length
       ? ` <span class="warn-toggle" data-id="${s.id}">警告 ${s.warnings.length} 件</span>` +
         `<ul class="warn-list hidden" id="warn-${s.id}">${s.warnings.map(w => `<li>${escapeHtml(w)}</li>`).join("")}</ul>`
       : "";
-    return `<li><b>${escapeHtml(s.name)}</b> — ${s.format === "html" ? "偽xls(HTML表)" : "CSV"} / ${s.encoding} / ` +
-           `${s.rawRowCount} 行 → ${s.rows.length} 行${merged}${warn}</li>`;
+    const partsInfo = s.parts
+      ? `<ul class="warn-list">${s.parts.map(p =>
+          `<li>${escapeHtml(p.name)}(${fmtLabel(p.format)} / ${p.encoding} / ${p.rowCount} 行)</li>`).join("")}</ul>`
+      : "";
+    const label = s.parts ? `結合(${s.parts.length}ファイル)` : fmtLabel(s.format);
+    return `<li><b>${escapeHtml(s.name)}</b> — ${label} / ${s.encoding} / ` +
+           `${s.rawRowCount} 行 → ${s.rows.length} 行${merged}${warn}${partsInfo}</li>`;
   });
   const errs = state.loadErrors.map(e => `<li class="load-error">${escapeHtml(e)}</li>`);
   $("loadSummary").innerHTML = items.length + errs.length
@@ -670,6 +819,7 @@ function renderLoader() {
 function renderTableControls() {
   const tv = state.tableView;
   fillSelect($("tblSnapshot"), state.snapshots.map(s => ({ value: s.id, label: s.name })), tv.snapshotId);
+  fillSelect($("tblFrozen"), FROZEN_CHOICES, String(tv.frozenCount));
   const snap = getSnap(tv.snapshotId);
   if (!snap) { $("tblColList").innerHTML = ""; fillSelect($("tblYmFrom"), [], ""); fillSelect($("tblYmTo"), [], ""); return; }
 
@@ -689,16 +839,7 @@ function renderTableControls() {
 
 function filteredTableRows(snap) {
   const tv = state.tableView;
-  const terms = tv.filterText.trim().toLowerCase().split(/[\s　]+/).filter(Boolean);
-  return snap.rows.filter(r => {
-    if (tv.ymFrom && r.yyyymm < tv.ymFrom) return false;
-    if (tv.ymTo && r.yyyymm > tv.ymTo) return false;
-    if (terms.length) {
-      const hay = (r.yyyymm + " " + r.projectCode + " " + Object.values(r.dims).join(" ")).toLowerCase();
-      if (!terms.every(t => hay.includes(t))) return false;
-    }
-    return true;
-  });
+  return snap.rows.filter(makeRowFilter(tv.filterText, tv.ymFrom, tv.ymTo));
 }
 
 function renderTable() {
@@ -728,38 +869,48 @@ function renderTable() {
     });
   }
 
+  const nFz = frozenLimit(tv.frozenCount);
   const arrow = k => (tv.sortKey === k ? (dir === 1 ? " ▲" : " ▼") : "");
+  // 表示列の並び: 年月・PJコード(キー列)+ 選択中の列。左端から nFz 列を固定
   const headCells =
-    `<th class="k1" data-sort="__key">年月${arrow("__key")}</th>` +
-    `<th class="k2" data-sort="__key">ﾌﾟﾛｼﾞｪｸﾄｺｰﾄﾞ</th>` +
-    cols.map(c => `<th class="${c.kind === "numeric" ? "num" : ""}" data-sort="${escapeHtml(c.key)}">${escapeHtml(c.key)}${arrow(c.key)}</th>`).join("");
+    `<th class="${fzClass(0, nFz)}" data-sort="__key">年月${arrow("__key")}</th>` +
+    `<th class="${fzClass(1, nFz)}" data-sort="__key">PJコード</th>` +
+    cols.map((c, ci) => `<th class="${fzClass(ci + 2, nFz, c.kind === "numeric" ? "num" : "")}"` +
+      ` data-sort="${escapeHtml(c.key)}">${escapeHtml(c.key)}${arrow(c.key)}</th>`).join("");
 
   const bodyRows = rows.map(r => {
     const merged = r.mergedCount > 1
       ? `<span class="merged-mark" title="同一キーの ${r.mergedCount} 行を合算">×${r.mergedCount}</span>` : "";
-    const cells = cols.map(c => {
+    const cells = cols.map((c, ci) => {
+      const i = ci + 2;
       if (c.kind === "numeric") {
         const v = r.values[c.key];
-        return `<td class="num${v != null && v < 0 ? " neg" : ""}">${fmtNumber(v)}</td>`;
+        return `<td class="${fzClass(i, nFz, "num" + (v != null && v < 0 ? " neg" : ""))}">${fmtNumber(v)}</td>`;
       }
-      return `<td>${escapeHtml(r.dims[c.key] ?? "")}</td>`;
+      const val = r.dims[c.key] ?? "";
+      const frozen = i < nFz;
+      return `<td class="${fzClass(i, nFz, frozen ? "fz-dim" : "")}"` +
+        `${frozen && val ? ` title="${escapeHtml(val)}"` : ""}>${escapeHtml(val)}</td>`;
     }).join("");
-    return `<tr><td class="k1">${r.yyyymm}</td><td class="k2">${escapeHtml(r.projectCode)}${merged}</td>${cells}</tr>`;
+    return `<tr><td class="${fzClass(0, nFz)}">${r.yyyymm}</td>` +
+      `<td class="${fzClass(1, nFz)}">${escapeHtml(r.projectCode)}${merged}</td>${cells}</tr>`;
   }).join("");
 
   // 小計行(フィルター後に表示されている行のみ・表示中の数値列のみ)
-  const footCells = cols.map(c => {
-    if (c.kind !== "numeric") return "<td></td>";
+  const footCells = cols.map((c, ci) => {
+    const i = ci + 2;
+    if (c.kind !== "numeric") return `<td class="${fzClass(i, nFz)}"></td>`;
     let sum = 0, has = false;
     for (const r of rows) { const v = r.values[c.key]; if (v != null) { sum += v; has = true; } }
-    return `<td class="num${has && sum < 0 ? " neg" : ""}">${has ? fmtNumber(sum) : ""}</td>`;
+    return `<td class="${fzClass(i, nFz, "num" + (has && sum < 0 ? " neg" : ""))}">${has ? fmtNumber(sum) : ""}</td>`;
   }).join("");
-  const foot = `<tr><td class="k1">小計</td><td class="k2"></td>${footCells}</tr>`;
+  const foot = `<tr><td class="${fzClass(0, nFz)}">小計</td><td class="${fzClass(1, nFz)}"></td>${footCells}</tr>`;
 
   $("tblBody").innerHTML =
     `<div class="tbl-scroll"><table class="data"><thead><tr>${headCells}</tr></thead>` +
     `<tbody>${bodyRows || ""}</tbody><tfoot>${foot}</tfoot></table></div>` +
     (rows.length ? "" : '<div class="empty-note">条件に合う行がありません</div>');
+  positionStickyColumns($("tblBody").querySelector(".tbl-scroll"));
   $("tblCount").textContent = `${rows.length} / ${snap.rows.length} 行を表示`;
 
   $("tblBody").querySelectorAll("th[data-sort]").forEach(th =>
@@ -865,84 +1016,138 @@ function renderChart() {
 }
 
 /* ---- 断面比較 ---- */
+const CMP_STATE_LABELS = { added: "追加", removed: "削除", changed: "変更", unchanged: "変化なし" };
+const CMP_ROW_CLASS = { added: "row-added", removed: "row-removed", changed: "row-changed", unchanged: "" };
+
+function deltaHtml(d) {
+  if (d == null || d === 0) return "";
+  const cls = d > 0 ? "up" : "down";
+  const sign = d > 0 ? "+" : "▲";
+  return `<span class="cmp-delta ${cls}">${sign}${fmtNumber(Math.abs(d))}</span>`;
+}
+
+function cmpPair() {
+  const cp = state.compareView;
+  const base = getSnap(cp.baseId), target = getSnap(cp.targetId);
+  if (!base || !target) return { error: "断面を 2 つ以上読み込むと比較できます" };
+  if (base.id === target.id) return { error: "異なる断面を選択してください" };
+  return { base, target };
+}
+
 function renderCompareControls() {
   const cp = state.compareView;
   const opts = state.snapshots.map(s => ({ value: s.id, label: s.name }));
   fillSelect($("cmpBase"), opts, cp.baseId);
   fillSelect($("cmpTarget"), opts, cp.targetId);
-  $("cmpShowUnchanged").checked = cp.showUnchanged;
+  fillSelect($("cmpFrozen"), FROZEN_CHOICES, String(cp.frozenCount));
+
+  const { base, target } = cmpPair();
+  if (!base) {
+    $("cmpColList").innerHTML = "";
+    fillSelect($("cmpYmFrom"), [], ""); fillSelect($("cmpYmTo"), [], "");
+    return;
+  }
+  // 表示列セレクター(比較対象の共通数値列)
+  const numCols = diffSnapshots(base, target).numCols;
+  for (const c of [...cp.hiddenCols]) if (!numCols.includes(c)) cp.hiddenCols.delete(c);
+  $("cmpColList").innerHTML = numCols.map(c =>
+    `<label><input type="checkbox" data-col="${escapeHtml(c)}"${cp.hiddenCols.has(c) ? "" : " checked"}> ${escapeHtml(c)}</label>`).join("");
+  $("cmpColList").querySelectorAll("input").forEach(cb =>
+    cb.addEventListener("change", () => {
+      if (cb.checked) cp.hiddenCols.delete(cb.dataset.col); else cp.hiddenCols.add(cb.dataset.col);
+      renderCompare();
+    }));
+
+  const months = [...new Set([...base.rows, ...target.rows].map(r => r.yyyymm))].sort();
+  const ymOpts = [{ value: "", label: "指定なし" }, ...months.map(m => ({ value: m, label: m }))];
+  fillSelect($("cmpYmFrom"), ymOpts, cp.ymFrom);
+  fillSelect($("cmpYmTo"), ymOpts, cp.ymTo);
 }
 
 function renderCompare() {
   const cp = state.compareView;
-  const base = getSnap(cp.baseId), target = getSnap(cp.targetId);
-  if (!base || !target) {
-    $("cmpBody").innerHTML = '<div class="empty-note">断面を 2 つ以上読み込むと比較できます</div>';
-    $("cmpSummary").innerHTML = ""; return;
-  }
-  if (base.id === target.id) {
-    $("cmpBody").innerHTML = '<div class="empty-note">異なる断面を選択してください</div>';
-    $("cmpSummary").innerHTML = ""; return;
+  const { base, target, error } = cmpPair();
+  if (error) {
+    $("cmpBody").innerHTML = `<div class="empty-note">${error}</div>`;
+    $("cmpSummary").innerHTML = ""; $("cmpAgg").innerHTML = ""; $("cmpCount").textContent = "";
+    return;
   }
 
   const diff = diffSnapshots(base, target);
-  $("cmpSummary").innerHTML =
-    `<span class="cmp-badge added">追加 ${diff.added.length}</span>` +
-    `<span class="cmp-badge removed">削除 ${diff.removed.length}</span>` +
-    `<span class="cmp-badge changed">変更 ${diff.changed.length}</span>` +
-    `<span class="cmp-badge">変化なし ${diff.unchangedCount}</span>`;
+  const entries = compareEntries(diff);
+  const rowFilter = makeRowFilter(cp.filterText, cp.ymFrom, cp.ymTo);
+  const filtered = entries.filter(e => rowFilter(e.target ?? e.base));
+  const counts = { added: 0, removed: 0, changed: 0, unchanged: 0 };
+  for (const e of filtered) counts[e.state]++;
+  const visible = filtered.filter(e => cp.activeStates.has(e.state));
 
+  // 状態バッジ(クリックでトグル絞り込み。件数は行フィルター適用後・状態絞り込み前)
+  $("cmpSummary").innerHTML = ["added", "removed", "changed", "unchanged"].map(st => {
+    const on = cp.activeStates.has(st);
+    return `<button type="button" class="cmp-badge ${st}${on ? "" : " off"}" data-state="${st}"` +
+      ` aria-pressed="${on}">${CMP_STATE_LABELS[st]} ${counts[st]}</button>`;
+  }).join("") + `<span class="note">バッジを押して絞り込み</span>`;
+  $("cmpSummary").querySelectorAll(".cmp-badge").forEach(btn =>
+    btn.addEventListener("click", () => {
+      const st = btn.dataset.state;
+      if (cp.activeStates.has(st)) cp.activeStates.delete(st); else cp.activeStates.add(st);
+      renderCompare();
+    }));
+
+  const numCols = diff.numCols.filter(c => !cp.hiddenCols.has(c));
+  $("cmpCount").textContent = `${visible.length} / ${entries.length} 行を表示`;
+
+  // サマリ表(行=表示中の数値列、列=前回計/今回計/増減。表示中の行に追従)
+  const agg = summarizeCompare(visible, numCols);
+  $("cmpAgg").innerHTML = numCols.length && visible.length
+    ? `<div class="tbl-scroll"><table class="data"><thead><tr><th>表示中の合計</th>` +
+      `<th class="num" title="${escapeHtml(base.name)}">前回計</th>` +
+      `<th class="num" title="${escapeHtml(target.name)}">今回計</th><th class="num">増減</th></tr></thead><tbody>` +
+      agg.map(a =>
+        `<tr><td>${escapeHtml(a.col)}</td>` +
+        `<td class="num${a.base < 0 ? " neg" : ""}">${fmtNumber(a.base)}</td>` +
+        `<td class="num${a.target < 0 ? " neg" : ""}">${fmtNumber(a.target)}</td>` +
+        `<td class="num">${Math.abs(a.delta) > CONFIG.epsilon ? deltaHtml(a.delta) : "±0"}</td></tr>`).join("") +
+      `</tbody></table></div>` : "";
+
+  // 詳細表(状態・年月・PJコード・プロジェクト名は常設。左端から固定列)
   const nameCol = CONFIG.projectNameColumns.find(c => target.columns.some(x => x.key === c && x.kind === "dim"))
                || CONFIG.projectNameColumns.find(c => base.columns.some(x => x.key === c && x.kind === "dim"));
-  const numCols = diff.numCols;
+  const nFz = frozenLimit(cp.frozenCount);
 
   const head =
-    `<th>状態</th><th class="k1">年月</th><th class="k2">ﾌﾟﾛｼﾞｪｸﾄｺｰﾄﾞ</th>` +
-    (nameCol ? `<th>${escapeHtml(nameCol)}</th>` : "") +
-    numCols.map(c => `<th class="num">${escapeHtml(c)}</th>`).join("");
+    `<th class="${fzClass(0, nFz)}">状態</th>` +
+    `<th class="${fzClass(1, nFz)}">年月</th>` +
+    `<th class="${fzClass(2, nFz)}">PJコード</th>` +
+    `<th class="${fzClass(3, nFz)}">${escapeHtml(nameCol || "プロジェクト名")}</th>` +
+    numCols.map((c, ci) => `<th class="${fzClass(ci + 4, nFz, "num")}">${escapeHtml(c)}</th>`).join("");
 
-  const deltaHtml = d => {
-    if (d == null || d === 0) return "";
-    const cls = d > 0 ? "up" : "down";
-    const sign = d > 0 ? "+" : "▲";
-    return `<span class="cmp-delta ${cls}">${sign}${fmtNumber(Math.abs(d))}</span>`;
-  };
-  const rowHtml = (cls, stateLabel, row, cellFn) =>
-    `<tr class="${cls}"><td class="state-cell">${stateLabel}</td>` +
-    `<td class="k1">${row.yyyymm}</td><td class="k2">${escapeHtml(row.projectCode)}</td>` +
-    (nameCol ? `<td>${escapeHtml(row.dims?.[nameCol] ?? "")}</td>` : "") +
-    numCols.map(cellFn).join("") + "</tr>";
-
-  const entries = [];
-  for (const t of diff.added) {
-    entries.push({ key: t.key, html: rowHtml("row-added", "追加", t,
-      c => `<td class="num">${fmtNumber(t.values[c])}</td>`) });
-  }
-  for (const b of diff.removed) {
-    entries.push({ key: b.key, html: rowHtml("row-removed", "削除", b,
-      c => `<td class="num">${fmtNumber(b.values[c])}</td>`) });
-  }
-  for (const ch of diff.changed) {
-    entries.push({ key: ch.key, html: rowHtml("row-changed", "変更", ch.target,
-      c => `<td class="num${ch.deltas[c] ? " changed-cell" : ""}" ${ch.deltas[c] ? `style="background:var(--changed-bg)"` : ""}>` +
-           `${fmtNumber(ch.target.values[c])}${deltaHtml(ch.deltas[c])}</td>`) });
-  }
-  if (cp.showUnchanged) {
-    const changedKeys = new Set(entries.map(e => e.key));
-    for (const t of target.rows) {
-      if (!changedKeys.has(t.key)) {
-        entries.push({ key: t.key, html: rowHtml("", "", t,
-          c => `<td class="num">${fmtNumber(t.values[c])}</td>`) });
+  const rowHtml = e => {
+    const r = e.target ?? e.base;
+    const name = nameCol ? r.dims?.[nameCol] ?? "" : "";
+    const cells = numCols.map((c, ci) => {
+      const i = ci + 4;
+      if (e.state === "changed") {
+        const d = e.deltas[c];
+        return `<td class="${fzClass(i, nFz, "num" + (d ? " chg" : ""))}">` +
+          `${fmtNumber(e.target.values[c])}${deltaHtml(d)}</td>`;
       }
-    }
-  }
-  entries.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
+      return `<td class="${fzClass(i, nFz, "num")}">${fmtNumber(r.values[c])}</td>`;
+    }).join("");
+    return `<tr class="${CMP_ROW_CLASS[e.state]}">` +
+      `<td class="${fzClass(0, nFz, "state-cell")}">${e.state === "unchanged" ? "" : CMP_STATE_LABELS[e.state]}</td>` +
+      `<td class="${fzClass(1, nFz)}">${r.yyyymm}</td>` +
+      `<td class="${fzClass(2, nFz)}">${escapeHtml(r.projectCode)}</td>` +
+      `<td class="${fzClass(3, nFz, "fz-dim")}"${name ? ` title="${escapeHtml(name)}"` : ""}>${escapeHtml(name)}</td>` +
+      cells + "</tr>";
+  };
 
-  $("cmpBody").innerHTML = entries.length
+  $("cmpBody").innerHTML = visible.length
     ? `<div class="tbl-scroll"><table class="data"><thead><tr>${head}</tr></thead>` +
-      `<tbody>${entries.map(e => e.html).join("")}</tbody></table></div>` +
+      `<tbody>${visible.map(rowHtml).join("")}</tbody></table></div>` +
       `<p class="note">「${escapeHtml(base.name)}」→「${escapeHtml(target.name)}」の変化。増減は base との差(+ 増 / ▲ 減)</p>`
-    : '<div class="empty-note">2 断面に差はありません</div>';
+    : '<div class="empty-note">条件に合う行がありません(バッジ・絞り込みを確認してください)</div>';
+  positionStickyColumns($("cmpBody").querySelector(".tbl-scroll"));
 }
 
 /* ========== 8. app ========== */
@@ -961,14 +1166,43 @@ function refreshAll() {
   renderCompareControls(); renderCompare();
 }
 
+// ファイルを text/grid まで読む(結合・単独の両パスで共用)
+async function readFilePart(file) {
+  const { text, encoding } = decodeBytes(await file.arrayBuffer());
+  const format = sniffFormat(text);
+  let grid, warnings = [];
+  if (format === "html") ({ grid, warnings } = parseHtmlTable(text));
+  else grid = parseCsv(text);
+  return { name: file.name, format, encoding, rowCount: Math.max(0, grid.length - 1), grid, warnings };
+}
+
 async function handleFiles(fileList) {
-  for (const file of fileList) {
+  const files = [...fileList];
+  if ($("mergeLoad").checked && files.length >= 2) {
+    // 結合読み込み: 選択された全ファイルを 1 断面にまとめる
+    // (1 ファイルでも失敗したら断面全体を作らない — 部分結合は数字が狂うため)
     try {
-      const buf = await file.arrayBuffer();
-      const { text, encoding } = decodeBytes(buf);
-      loadText(text, { name: file.name, encoding });
+      const parts = [];
+      for (const file of files) parts.push(await readFilePart(file));
+      const merged = mergeGrids(parts.map(p => p.grid));
+      state.snapshots.push(normalizeSnapshot(merged, {
+        name: parts.map(p => p.name).join(" + "),
+        format: "merged",
+        encoding: [...new Set(parts.map(p => p.encoding))].join("/"),
+        parts: parts.map(({ grid, ...m }) => m),
+      }, parts.flatMap(p => p.warnings)));
     } catch (e) {
-      state.loadErrors.push(`${file.name}: ${e.message}`);
+      state.loadErrors.push(`結合読み込み失敗(${files.map(f => f.name).join(", ")}): ${e.message}`);
+    }
+  } else {
+    for (const file of files) {
+      try {
+        const part = await readFilePart(file);
+        state.snapshots.push(normalizeSnapshot(part.grid,
+          { name: part.name, format: part.format, encoding: part.encoding }, part.warnings));
+      } catch (e) {
+        state.loadErrors.push(`${file.name}: ${e.message}`);
+      }
     }
   }
   refreshAll();
@@ -1013,7 +1247,16 @@ function init() {
       for (const v of ["table", "chart", "compare"]) {
         $("view-" + v).classList.toggle("hidden", v !== btn.dataset.view);
       }
+      // 非表示中はセル幅が測れないため、表示されたタイミングで固定列の位置を再計算
+      repositionAllSticky();
     }));
+
+  // リサイズで列幅が変わると固定位置がずれるため追従(デバウンス)
+  let resizeTimer = null;
+  window.addEventListener("resize", () => {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(repositionAllSticky, 150);
+  });
 
   $("tblSnapshot").addEventListener("change", e => {
     state.tableView.snapshotId = e.target.value; renderTableControls(); renderTable();
@@ -1021,15 +1264,20 @@ function init() {
   $("tblFilter").addEventListener("input", e => { state.tableView.filterText = e.target.value; renderTable(); });
   $("tblYmFrom").addEventListener("change", e => { state.tableView.ymFrom = e.target.value; renderTable(); });
   $("tblYmTo").addEventListener("change", e => { state.tableView.ymTo = e.target.value; renderTable(); });
+  $("tblFrozen").addEventListener("change", e => { state.tableView.frozenCount = +e.target.value; renderTable(); });
 
   $("chMode").addEventListener("change", e => { state.chartView.mode = e.target.value; renderChartControls(); renderChart(); });
   $("chSnapshot").addEventListener("change", e => { state.chartView.snapshotId = e.target.value; renderChart(); });
   $("chYm").addEventListener("change", e => { state.chartView.yyyymm = e.target.value; renderChart(); });
   $("chMetric").addEventListener("change", e => { state.chartView.metric = e.target.value; renderChart(); });
 
-  $("cmpBase").addEventListener("change", e => { state.compareView.baseId = e.target.value; renderCompare(); });
-  $("cmpTarget").addEventListener("change", e => { state.compareView.targetId = e.target.value; renderCompare(); });
-  $("cmpShowUnchanged").addEventListener("change", e => { state.compareView.showUnchanged = e.target.checked; renderCompare(); });
+  // base/target 変更時のみコントロール再生成(フィルター入力のフォーカスを守るため他は renderCompare のみ)
+  $("cmpBase").addEventListener("change", e => { state.compareView.baseId = e.target.value; renderCompareControls(); renderCompare(); });
+  $("cmpTarget").addEventListener("change", e => { state.compareView.targetId = e.target.value; renderCompareControls(); renderCompare(); });
+  $("cmpFilter").addEventListener("input", e => { state.compareView.filterText = e.target.value; renderCompare(); });
+  $("cmpYmFrom").addEventListener("change", e => { state.compareView.ymFrom = e.target.value; renderCompare(); });
+  $("cmpYmTo").addEventListener("change", e => { state.compareView.ymTo = e.target.value; renderCompare(); });
+  $("cmpFrozen").addEventListener("change", e => { state.compareView.frozenCount = +e.target.value; renderCompare(); });
 
   refreshAll();
 }

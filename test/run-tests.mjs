@@ -18,7 +18,8 @@ const code = html.slice(html.indexOf("\n", beginIdx) + 1, html.lastIndexOf("\n",
 
 const exported = ["CONFIG", "decodeBytes", "toHalfWidth", "parseNumber", "normalizeYyyymm",
   "escapeHtml", "fmtNumber", "sniffFormat", "parseCsv", "normalizeSnapshot",
-  "mergeDuplicateKeys", "diffSnapshots", "niceTicks"];
+  "mergeDuplicateKeys", "mergeGrids", "makeRowFilter",
+  "diffSnapshots", "compareEntries", "summarizeCompare", "niceTicks"];
 const lib = vm.runInNewContext(`${code}\n;({${exported.join(",")}})`, { TextDecoder });
 
 let passed = 0, failed = 0;
@@ -147,6 +148,110 @@ function ok(cond, label) { eq(!!cond, true, label); }
   const a2 = load("ledger_202506締め_utf8.csv");
   const d2 = lib.diffSnapshots(a, a2);
   eq(d2.added.length + d2.removed.length + d2.changed.length, 0, "統合: CP932版とUTF-8版は同一内容");
+}
+
+/* ---- CONFIG.forceDimColumns / ignoredColumns ---- */
+{
+  const grid = [
+    ["年月", "プロジェクトコード", "受注番号", "売上高", "販管費計"],
+    ["202501", "P001", "12345", "100", "10"],
+    ["202502", "P001", "67890", "200", "20"],
+  ];
+  lib.CONFIG.forceDimColumns.push("受注番号");
+  lib.CONFIG.ignoredColumns.push("販管費計");
+  const s = lib.normalizeSnapshot(grid, { name: "t", format: "csv", encoding: "UTF-8" });
+  lib.CONFIG.forceDimColumns.pop();
+  lib.CONFIG.ignoredColumns.pop();
+  eq(s.columns.find(c => c.key === "受注番号").kind, "dim",
+    "forceDimColumns: 数値100%の列でも dim になる");
+  eq(s.columns.some(c => c.key === "販管費計"), false, "ignoredColumns: 列ごと消える");
+  ok(s.warnings.some(w => w.includes("販管費計") && w.includes("無視")),
+    "ignoredColumns: 無視が警告に記録される");
+  eq(s.rows[0].dims["受注番号"], "12345", "forceDimColumns: 値は dim として保持される");
+}
+
+/* ---- mergeGrids ---- */
+{
+  const a = [["年月", "プロジェクトコード", "売上高"], ["202501", "P001", "100"]];
+  const b = [["プロジェクトコード", "年月", "販管費", "販管費計"],   // 列順が違う+固有列あり
+             ["Z999", "202501", "30", "30"]];
+  const m = lib.mergeGrids([a, b]);
+  eq(m[0], ["年月", "プロジェクトコード", "売上高", "販管費", "販管費計"],
+    "mergeGrids: 和集合ヘッダー(先頭ファイルの列順優先)");
+  eq(m[1], ["202501", "P001", "100", "", ""], "mergeGrids: A側の行(B固有列は空)");
+  eq(m[2], ["202501", "Z999", "", "30", "30"], "mergeGrids: B側の行が列順を吸収して再配置される");
+  // 結合後に同一キーが normalizeSnapshot で合算されること
+  const dup = lib.mergeGrids([a, [["年月", "プロジェクトコード", "売上高"], ["202501", "P001", "50"]]]);
+  const s = lib.normalizeSnapshot(dup, { name: "t", format: "merged", encoding: "-" });
+  eq(s.rows.length, 1, "mergeGrids→normalize: ファイル跨ぎの同一キーが1行に");
+  eq(s.rows[0].values["売上高"], 150, "mergeGrids→normalize: 数値が合算される");
+}
+
+/* ---- makeRowFilter ---- */
+{
+  const row = { yyyymm: "202504", projectCode: "P002", dims: { "プロジェクト名": "髙島商事向け導入支援", "部門": "営業1部" } };
+  ok(lib.makeRowFilter("", "", "")(row), "makeRowFilter: 空条件は全通過");
+  ok(lib.makeRowFilter("髙島 営業1部", "", "")(row), "makeRowFilter: スペース区切りAND一致");
+  eq(lib.makeRowFilter("髙島 開発部", "", "")(row), false, "makeRowFilter: AND不一致は除外");
+  ok(lib.makeRowFilter("", "202504", "202504")(row), "makeRowFilter: 年月範囲内");
+  eq(lib.makeRowFilter("", "202505", "")(row), false, "makeRowFilter: from超過で除外");
+  eq(lib.makeRowFilter("", "", "202503")(row), false, "makeRowFilter: to未満で除外");
+  ok(lib.makeRowFilter("p002", "", "")(row), "makeRowFilter: コードは大文字小文字無視");
+}
+
+/* ---- compareEntries / summarizeCompare ---- */
+{
+  const mk = (ym, code, v) => ({ key: `${ym}|${code}`, yyyymm: ym, projectCode: code, dims: {}, values: { "売上高": v }, mergedCount: 1 });
+  const diff = {
+    added: [mk("202502", "P9", 100)],
+    removed: [mk("202501", "P8", 40)],
+    changed: [{ key: "202501|P1", base: mk("202501", "P1", 10), target: mk("202501", "P1", 25), deltas: { "売上高": 15 } }],
+    unchanged: [{ key: "202501|P2", base: mk("202501", "P2", 5), target: mk("202501", "P2", 5) }],
+  };
+  const entries = lib.compareEntries(diff);
+  eq(entries.map(e => e.state), ["changed", "unchanged", "removed", "added"],
+    "compareEntries: キー昇順の統一エントリ列");
+  const sum = lib.summarizeCompare(entries, ["売上高"]);
+  eq(sum, [{ col: "売上高", base: 55, target: 130, delta: 75 }],
+    "summarizeCompare: base計/target計/差分(added は base 0、removed は target 0 扱い)");
+  const sum2 = lib.summarizeCompare(entries.filter(e => e.state === "changed"), ["売上高"]);
+  eq(sum2[0].delta, 15, "summarizeCompare: 絞り込んだエントリだけで集計される");
+}
+
+/* ---- 統合テスト: A/B 分割ファイルの結合 ≡ 一体ファイル ---- */
+{
+  const parse = f => {
+    const { text } = lib.decodeBytes(readFileSync(join(root, "sample-data", f)));
+    return lib.parseCsv(text);
+  };
+  const whole = lib.normalizeSnapshot(parse("ledger_202507締め.csv"), { name: "whole", format: "csv", encoding: "-" });
+  const merged = lib.mergeGrids([parse("ledger_202507締め_A事業.csv"), parse("ledger_202507締め_B販管費.csv")]);
+  const snap = lib.normalizeSnapshot(merged, { name: "A+B", format: "merged", encoding: "-" });
+  eq(snap.rows.length, 42, "結合統合: A+B は 42 行(Z999 合算後)");
+  eq(snap.rows.find(r => r.key === "202507|Z999").mergedCount, 2, "結合統合: Z999 はファイルB内の2行が合算");
+  const d = lib.diffSnapshots(whole, snap);
+  eq(d.added.length + d.removed.length + d.changed.length, 0,
+    "結合統合: A+B 結合断面 ≡ 一体ファイルの断面(共通数値列で差ゼロ)");
+  ok(snap.columns.some(c => c.key === "販管費計" && c.kind === "numeric"),
+    "結合統合: ignoredColumns 未指定なら販管費計列は残る(numeric判定)");
+  lib.CONFIG.ignoredColumns.push("販管費計");
+  const snap2 = lib.normalizeSnapshot(lib.mergeGrids([parse("ledger_202507締め_A事業.csv"), parse("ledger_202507締め_B販管費.csv")]),
+    { name: "A+B", format: "merged", encoding: "-" });
+  lib.CONFIG.ignoredColumns.pop();
+  eq(snap2.columns.map(c => c.key), whole.columns.map(c => c.key),
+    "結合統合: ignoredColumns 指定で一体ファイルと同一の列構成になる");
+}
+
+/* ---- diffSnapshots.unchanged ---- */
+{
+  const load = f => {
+    const { text } = lib.decodeBytes(readFileSync(join(root, "sample-data", f)));
+    return lib.normalizeSnapshot(lib.parseCsv(text), { name: f, format: "csv", encoding: "-" });
+  };
+  const d = lib.diffSnapshots(load("ledger_202506締め.csv"), load("ledger_202507締め.csv"));
+  eq(d.unchanged.length, d.unchangedCount, "unchanged: 配列と件数が一致");
+  ok(d.unchanged.every(u => u.base.key === u.key && u.target.key === u.key),
+    "unchanged: base/target のキー整合");
 }
 
 /* ---- niceTicks ---- */
