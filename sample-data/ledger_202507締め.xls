@@ -1,0 +1,54 @@
+<html><head><meta http-equiv='Content-Type' content='text/html; charset=shift_jis'></head><body>
+<table><tr><td>元帳一覧表</td></tr><tr><td>出力日: 2025/08/05</td></tr></table>
+<table border='1'>
+<tr><th>年月</th><th>プロジェクトコード</th><th>プロジェクト名</th><th>部門</th><th>売上高</th><th>売上原価</th><th>販管費</th><th>営業利益</th></tr>
+<tr><td>202501</td><td>P001</td><td>基幹システム刷新</td><td>開発部</td><td align='right'>28,800,000</td><td align='right'>16,061,000</td><td align='right'>468,000</td><td align='right'>12,271,000</td></tr>
+<tr><td>202501</td><td>P002</td><td>髙島商事向け導入支援</td><td>営業1部</td><td align='right'>11,510,000</td><td align='right'>7,383,000</td><td align='right'>308,000</td><td align='right'>3,819,000</td></tr>
+<tr><td>202501</td><td>P003</td><td>データ分析基盤構築</td><td>開発部</td><td align='right'>26,520,000</td><td align='right'>18,330,000</td><td align='right'>766,000</td><td align='right'>7,424,000</td></tr>
+<tr><td>202501</td><td>P004</td><td>クラウド移行支援(設計,構築)</td><td>営業2部</td><td align='right'>21,980,000</td><td align='right'>12,457,000</td><td align='right'>917,000</td><td align='right'>8,606,000</td></tr>
+<tr><td>202501</td><td>P005</td><td>保守運用サービス</td><td>営業1部</td><td align='right'>13,860,000</td><td align='right'>7,962,000</td><td align='right'>1,243,000</td><td align='right'>4,655,000</td></tr>
+<tr><td>202501</td><td>Z999</td><td>販売費および一般管理費</td><td>本社</td><td align='right'>0</td><td align='right'>0</td><td align='right'>7,911,000</td><td align='right'>△7,911,000</td></tr>
+<tr><td>202501</td><td>Z999</td><td>販売費および一般管理費</td><td>共通</td><td align='right'>0</td><td align='right'>0</td><td align='right'>5,275,000</td><td align='right'>△5,275,000</td></tr>
+<tr><td>202502</td><td>P001</td><td>基幹システム刷新</td><td>開発部</td><td align='right'>20,340,000</td><td align='right'>12,034,000</td><td align='right'>1,042,000</td><td align='right'>7,264,000</td></tr>
+<tr><td>202502</td><td>P002</td><td>髙島商事向け導入支援</td><td>営業1部</td><td align='right'>23,980,000</td><td align='right'>18,483,000</td><td align='right'>312,000</td><td align='right'>5,185,000</td></tr>
+<tr><td>202502</td><td>P003</td><td>データ分析基盤構築</td><td>開発部</td><td align='right'>8,740,000</td><td align='right'>5,647,000</td><td align='right'>546,000</td><td align='right'>2,547,000</td></tr>
+<tr><td>202502</td><td>P004</td><td>クラウド移行支援(設計,構築)</td><td>営業2部</td><td align='right'>13,740,000</td><td align='right'>7,881,000</td><td align='right'>307,000</td><td align='right'>5,552,000</td></tr>
+<tr><td>202502</td><td>P005</td><td>保守運用サービス</td><td>営業1部</td><td align='right'>20,660,000</td><td align='right'>11,852,000</td><td align='right'>434,000</td><td align='right'>8,374,000</td></tr>
+<tr><td>202502</td><td>Z999</td><td>販売費および一般管理費</td><td>本社</td><td align='right'>0</td><td align='right'>0</td><td align='right'>6,447,000</td><td align='right'>△6,447,000</td></tr>
+<tr><td>202502</td><td>Z999</td><td>販売費および一般管理費</td><td>共通</td><td align='right'>0</td><td align='right'>0</td><td align='right'>4,299,000</td><td align='right'>△4,299,000</td></tr>
+<tr><td>202503</td><td>P001</td><td>基幹システム刷新</td><td>開発部</td><td align='right'>11,210,000</td><td align='right'>7,449,000</td><td align='right'>1,222,000</td><td align='right'>2,539,000</td></tr>
+<tr><td>202503</td><td>P002</td><td>髙島商事向け導入支援</td><td>営業1部</td><td align='right'>24,770,000</td><td align='right'>18,551,000</td><td align='right'>626,000</td><td align='right'>5,593,000</td></tr>
+<tr><td>202503</td><td>P003</td><td>データ分析基盤構築</td><td>開発部</td><td align='right'>22,950,000</td><td align='right'>17,955,000</td><td align='right'>487,000</td><td align='right'>4,508,000</td></tr>
+<tr><td>202503</td><td>P004</td><td>クラウド移行支援(設計,構築)</td><td>営業2部</td><td align='right'>15,210,000</td><td align='right'>9,449,000</td><td align='right'>764,000</td><td align='right'>4,997,000</td></tr>
+<tr><td>202503</td><td>P005</td><td>保守運用サービス</td><td>営業1部</td><td align='right'>18,720,000</td><td align='right'>14,134,000</td><td align='right'>1,443,000</td><td align='right'>3,143,000</td></tr>
+<tr><td>202503</td><td>Z999</td><td>販売費および一般管理費</td><td>本社</td><td align='right'>0</td><td align='right'>0</td><td align='right'>7,926,000</td><td align='right'>△7,926,000</td></tr>
+<tr><td>202503</td><td>Z999</td><td>販売費および一般管理費</td><td>共通</td><td align='right'>0</td><td align='right'>0</td><td align='right'>5,285,000</td><td align='right'>△5,285,000</td></tr>
+<tr><td>202504</td><td>P001</td><td>基幹システム刷新</td><td>開発部</td><td align='right'>18,940,000</td><td align='right'>12,858,000</td><td align='right'>528,000</td><td align='right'>5,554,000</td></tr>
+<tr><td>202504</td><td>P002</td><td>髙島商事向け導入支援</td><td>営業1部</td><td align='right'>27,780,000</td><td align='right'>15,290,000</td><td align='right'>491,000</td><td align='right'>11,999,000</td></tr>
+<tr><td>202504</td><td>P003</td><td>データ分析基盤構築</td><td>開発部</td><td align='right'>29,620,000</td><td align='right'>18,897,000</td><td align='right'>543,000</td><td align='right'>10,180,000</td></tr>
+<tr><td>202504</td><td>P004</td><td>クラウド移行支援(設計,構築)</td><td>営業2部</td><td align='right'>14,670,000</td><td align='right'>10,522,000</td><td align='right'>482,000</td><td align='right'>3,666,000</td></tr>
+<tr><td>202504</td><td>P005</td><td>保守運用サービス</td><td>営業1部</td><td align='right'>16,930,000</td><td align='right'>11,032,000</td><td align='right'>352,000</td><td align='right'>5,546,000</td></tr>
+<tr><td>202504</td><td>Z999</td><td>販売費および一般管理費</td><td>本社</td><td align='right'>0</td><td align='right'>0</td><td align='right'>8,305,000</td><td align='right'>△8,305,000</td></tr>
+<tr><td>202504</td><td>Z999</td><td>販売費および一般管理費</td><td>共通</td><td align='right'>0</td><td align='right'>0</td><td align='right'>5,538,000</td><td align='right'>△5,538,000</td></tr>
+<tr><td>202505</td><td>P001</td><td>基幹システム刷新</td><td>開発部</td><td align='right'>26,690,000</td><td align='right'>17,741,000</td><td align='right'>1,355,000</td><td align='right'>7,594,000</td></tr>
+<tr><td>202505</td><td>P002</td><td>髙島商事向け導入支援</td><td>営業1部</td><td align='right'>17,180,000</td><td align='right'>12,031,000</td><td align='right'>1,380,000</td><td align='right'>3,769,000</td></tr>
+<tr><td>202505</td><td>P003</td><td>データ分析基盤構築</td><td>開発部</td><td align='right'>23,700,000</td><td align='right'>15,482,000</td><td align='right'>372,000</td><td align='right'>7,846,000</td></tr>
+<tr><td>202505</td><td>P004</td><td>クラウド移行支援(設計,構築)</td><td>営業2部</td><td align='right'>21,270,000</td><td align='right'>13,846,000</td><td align='right'>601,000</td><td align='right'>6,823,000</td></tr>
+<tr><td>202505</td><td>P005</td><td>保守運用サービス</td><td>営業1部</td><td align='right'>25,450,000</td><td align='right'>14,831,000</td><td align='right'>1,060,000</td><td align='right'>9,559,000</td></tr>
+<tr><td>202505</td><td>Z999</td><td>販売費および一般管理費</td><td>本社</td><td align='right'>0</td><td align='right'>0</td><td align='right'>7,336,000</td><td align='right'>△7,336,000</td></tr>
+<tr><td>202505</td><td>Z999</td><td>販売費および一般管理費</td><td>共通</td><td align='right'>0</td><td align='right'>0</td><td align='right'>4,891,000</td><td align='right'>△4,891,000</td></tr>
+<tr><td>202506</td><td>P001</td><td>基幹システム刷新</td><td>開発部</td><td align='right'>27,610,000</td><td align='right'>16,097,000</td><td align='right'>1,058,000</td><td align='right'>10,455,000</td></tr>
+<tr><td>202506</td><td>P002</td><td>髙島商事向け導入支援</td><td>営業1部</td><td align='right'>18,700,000</td><td align='right'>14,043,000</td><td align='right'>815,000</td><td align='right'>3,842,000</td></tr>
+<tr><td>202506</td><td>P003</td><td>データ分析基盤構築</td><td>開発部</td><td align='right'>13,480,000</td><td align='right'>9,946,000</td><td align='right'>545,000</td><td align='right'>2,989,000</td></tr>
+<tr><td>202506</td><td>P004</td><td>クラウド移行支援(設計,構築)</td><td>営業2部</td><td align='right'>30,000,000</td><td align='right'>21,366,000</td><td align='right'>1,431,000</td><td align='right'>7,203,000</td></tr>
+<tr><td>202506</td><td>P006</td><td>新規SaaS立ち上げ</td><td>営業2部</td><td align='right'>9,730,000</td><td align='right'>7,760,000</td><td align='right'>978,000</td><td align='right'>992,000</td></tr>
+<tr><td>202506</td><td>Z999</td><td>販売費および一般管理費</td><td>本社</td><td align='right'>0</td><td align='right'>0</td><td align='right'>8,097,000</td><td align='right'>△8,097,000</td></tr>
+<tr><td>202506</td><td>Z999</td><td>販売費および一般管理費</td><td>共通</td><td align='right'>0</td><td align='right'>0</td><td align='right'>5,398,000</td><td align='right'>△5,398,000</td></tr>
+<tr><td>202507</td><td>P001</td><td>基幹システム刷新</td><td>開発部</td><td align='right'>14,220,000</td><td align='right'>10,822,000</td><td align='right'>1,455,000</td><td align='right'>1,943,000</td></tr>
+<tr><td>202507</td><td>P002</td><td>髙島商事向け導入支援</td><td>営業1部</td><td align='right'>16,780,000</td><td align='right'>10,933,000</td><td align='right'>591,000</td><td align='right'>5,256,000</td></tr>
+<tr><td>202507</td><td>P003</td><td>データ分析基盤構築</td><td>開発部</td><td align='right'>9,060,000</td><td align='right'>6,003,000</td><td align='right'>527,000</td><td align='right'>2,530,000</td></tr>
+<tr><td>202507</td><td>P004</td><td>クラウド移行支援(設計,構築)</td><td>営業2部</td><td align='right'>19,960,000</td><td align='right'>13,727,000</td><td align='right'>1,475,000</td><td align='right'>4,758,000</td></tr>
+<tr><td>202507</td><td>P006</td><td>新規SaaS立ち上げ</td><td>営業2部</td><td align='right'>27,690,000</td><td align='right'>20,382,000</td><td align='right'>349,000</td><td align='right'>6,959,000</td></tr>
+<tr><td>202507</td><td>Z999</td><td>販売費および一般管理費</td><td>本社</td><td align='right'>0</td><td align='right'>0</td><td align='right'>5,511,000</td><td align='right'>△5,511,000</td></tr>
+<tr><td>202507</td><td>Z999</td><td>販売費および一般管理費</td><td>共通</td><td align='right'>0</td><td align='right'>0</td><td align='right'>3,674,000</td><td align='right'>△3,674,000</td></tr>
+</table></body></html>
