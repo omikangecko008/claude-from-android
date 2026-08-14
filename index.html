@@ -98,6 +98,10 @@ details.colsel .colsel-pop{
   max-height:280px;overflow-y:auto;min-width:180px;
 }
 .colsel-pop label{display:block;white-space:nowrap;color:var(--ink)}
+.colsel-row{display:flex;align-items:center;gap:10px;white-space:nowrap;padding:2px 0}
+.colsel-row .checkline{gap:3px}
+.colsel-row .colname{color:var(--ink)}
+.colsel-head{display:flex;gap:10px;font-size:11px;color:var(--muted);border-bottom:1px solid var(--grid);margin-bottom:2px;padding-bottom:2px}
 .checkline{display:inline-flex;align-items:center;gap:4px;white-space:nowrap}
 .dot{display:inline-block;width:10px;height:10px;border-radius:50%;flex:none}
 .note{font-size:12px;color:var(--muted)}
@@ -149,6 +153,28 @@ table.data td.chg{background:var(--changed-bg)}
 .cmp-delta.up{color:var(--up)}
 .cmp-delta.down{color:var(--down)}
 .state-cell{font-size:11px;color:var(--ink-2)}
+
+/* ---- グラフ: 系列検索・選択 ---- */
+.series-search-wrap{position:relative;max-width:360px;margin-bottom:8px}
+.series-search-wrap input{width:100%}
+.series-candidates{
+  position:absolute;z-index:20;top:calc(100% + 4px);left:0;right:0;background:var(--surface);
+  border:1px solid var(--axis);border-radius:6px;box-shadow:0 4px 12px rgba(0,0,0,.12);
+  max-height:240px;overflow-y:auto;
+}
+.series-candidates .cand{
+  display:flex;align-items:center;gap:8px;padding:5px 10px;cursor:pointer;font-size:13px;
+}
+.series-candidates .cand:hover{background:var(--hover-bg)}
+.series-candidates .cand-more{padding:5px 10px;color:var(--muted);font-size:12px}
+.series-candidates .cand-empty{padding:5px 10px;color:var(--muted);font-size:12px}
+.series-selected{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px;min-height:1.6em}
+.series-chip{
+  display:inline-flex;align-items:center;gap:6px;background:var(--page);
+  border:1px solid var(--border);border-radius:16px;padding:3px 6px 3px 10px;font-size:12px;color:var(--ink);
+}
+.series-chip .chip-x{cursor:pointer;border:none;background:none;color:var(--muted);font-size:14px;padding:0 4px}
+.series-chip .chip-x:hover{color:var(--down)}
 
 /* ---- グラフ ---- */
 .chart-box{width:100%}
@@ -205,7 +231,6 @@ svg .pt{cursor:pointer}
       </details>
       <label>絞り込み <input type="text" id="tblFilter" placeholder="コード・名称など(スペース区切りAND)"></label>
       <label>年月 <select id="tblYmFrom"></select> 〜 <select id="tblYmTo"></select></label>
-      <label title="横スクロール時に左端から何列を固定表示するか">固定列 <select id="tblFrozen"></select></label>
       <span class="note" id="tblCount"></span>
     </div>
     <div id="tblBody"></div>
@@ -224,7 +249,11 @@ svg .pt{cursor:pointer}
       <label id="chYmWrap" class="hidden">年月 <select id="chYm"></select></label>
       <label>指標 <select id="chMetric"></select></label>
     </div>
-    <div class="controls" id="chProjects"></div>
+    <div class="series-search-wrap">
+      <input type="text" id="chSearch" placeholder="プロジェクトを検索して追加(コード・名称)" autocomplete="off">
+      <div class="series-candidates hidden" id="chCandidates"></div>
+    </div>
+    <div class="series-selected" id="chSelected"></div>
     <div class="chart-box" id="chartBox"></div>
     <div class="legend" id="chartLegend"></div>
     <div id="chartReadout" class="note">点をクリック / タップすると値を表示します</div>
@@ -241,7 +270,6 @@ svg .pt{cursor:pointer}
       </details>
       <label>絞り込み <input type="text" id="cmpFilter" placeholder="コード・名称など(スペース区切りAND)"></label>
       <label>年月 <select id="cmpYmFrom"></select> 〜 <select id="cmpYmTo"></select></label>
-      <label title="横スクロール時に左端から何列を固定表示するか">固定列 <select id="cmpFrozen"></select></label>
       <span class="note" id="cmpCount"></span>
     </div>
     <div class="cmp-summary" id="cmpSummary"></div>
@@ -608,6 +636,15 @@ function niceTicks(min, max, count) {
   return { lo, hi, ticks };
 }
 
+// 列(または任意のキー付きオブジェクト)を「固定指定されたもの」が先頭に来るよう安定分割する。
+// 固定・非固定それぞれの内部の並びは元の順序を保つ(表の列固定機能で使用)。
+function partitionPinned(items, pinnedKeys, keyFn) {
+  const kf = keyFn || (x => x.key);
+  const pinned = items.filter(x => pinnedKeys.has(kf(x)));
+  const rest = items.filter(x => !pinnedKeys.has(kf(x)));
+  return { ordered: [...pinned, ...rest], pinnedCount: pinned.length };
+}
+
 /* ===================================================================== */
 /* PURE:END */
 /* ===================================================================== */
@@ -701,21 +738,25 @@ const $ = id => document.getElementById(id);
 const state = {
   snapshots: [],
   loadErrors: [],
-  tableView: { snapshotId: null, hiddenCols: new Set(), filterText: "", ymFrom: "", ymTo: "", sortKey: "__key", sortDir: 1, frozenCount: 2 },
+  tableView: {
+    snapshotId: null, hiddenCols: new Set(), filterText: "", ymFrom: "", ymTo: "", sortKey: "__key", sortDir: 1,
+    pinnedCols: new Set(["__ym", "__pj"]),   // 列名で固定指定(キー列は既定で固定)
+  },
   chartView: { mode: "timeline", snapshotId: null, yyyymm: "", metric: "", selected: new Set(), colorMap: new Map() },
   compareView: {
     baseId: null, targetId: null,
     activeStates: new Set(["added", "removed", "changed"]),   // 「変化なし」は初期オフ
-    hiddenCols: new Set(), filterText: "", ymFrom: "", ymTo: "", frozenCount: 4,
+    hiddenCols: new Set(), filterText: "", ymFrom: "", ymTo: "",
+    pinnedCols: new Set(["__state", "__ym", "__pj", "__name"]),
   },
 };
 
 function getSnap(id) { return state.snapshots.find(s => s.id === id) || null; }
 
-/* ---- 固定列(左端からN列を sticky に) ---- */
-const FROZEN_CHOICES = [0, 1, 2, 3, 4, 5, 6].map(n => ({ value: String(n), label: n === 0 ? "なし" : `${n}列` }));
+/* ---- 固定列(列名で指定。固定した列は元の列順を保ったまま左端にまとめて sticky にする) ---- */
 
-// スマホ幅では固定列が画面を圧迫するため最大2列に制限
+// スマホ幅では固定列が画面を圧迫するため sticky として効かせるのは最大2列に制限
+// (固定指定した列自体は左端にまとまったまま。3列目以降は sticky でなくなるだけ)
 function frozenLimit(n) {
   return Math.min(n, window.innerWidth <= 640 ? 2 : 6);
 }
@@ -815,21 +856,43 @@ function renderLoader() {
     el.addEventListener("click", () => $("warn-" + el.dataset.id).classList.toggle("hidden")));
 }
 
+// 列セレクター(表示列 + 固定列)の中身を作る。keyCols は常時表示(表示チェックなし・固定チェックのみ)、
+// dataCols は表示チェック+固定チェックの両方を持つ。
+function renderColselPopup(el, keyCols, dataCols, hiddenCols, pinnedCols, onChange) {
+  const row = (key, label, showVisToggle) => {
+    const vis = showVisToggle
+      ? `<label class="checkline"><input type="checkbox" class="colsel-vis" data-col="${escapeHtml(key)}"${hiddenCols.has(key) ? "" : " checked"}> 表示</label>`
+      : `<span class="checkline"></span>`;
+    return `<div class="colsel-row">${vis}` +
+      `<label class="checkline"><input type="checkbox" class="colsel-pin" data-col="${escapeHtml(key)}"${pinnedCols.has(key) ? " checked" : ""}> 固定</label>` +
+      `<span class="colname">${escapeHtml(label)}</span></div>`;
+  };
+  el.innerHTML =
+    `<div class="colsel-head"><span style="width:3.6em"></span><span style="width:3.6em"></span><span>列名</span></div>` +
+    keyCols.map(c => row(c.key, c.label, false)).join("") +
+    dataCols.map(c => row(c.key, c.key, true)).join("");
+  el.querySelectorAll(".colsel-vis").forEach(cb =>
+    cb.addEventListener("change", () => {
+      if (cb.checked) hiddenCols.delete(cb.dataset.col); else hiddenCols.add(cb.dataset.col);
+      onChange();
+    }));
+  el.querySelectorAll(".colsel-pin").forEach(cb =>
+    cb.addEventListener("change", () => {
+      if (cb.checked) pinnedCols.add(cb.dataset.col); else pinnedCols.delete(cb.dataset.col);
+      onChange();
+    }));
+}
+
 /* ---- 全体表 ---- */
+const TABLE_KEY_COLS = [{ key: "__ym", label: "年月" }, { key: "__pj", label: "PJコード" }];
+
 function renderTableControls() {
   const tv = state.tableView;
   fillSelect($("tblSnapshot"), state.snapshots.map(s => ({ value: s.id, label: s.name })), tv.snapshotId);
-  fillSelect($("tblFrozen"), FROZEN_CHOICES, String(tv.frozenCount));
   const snap = getSnap(tv.snapshotId);
   if (!snap) { $("tblColList").innerHTML = ""; fillSelect($("tblYmFrom"), [], ""); fillSelect($("tblYmTo"), [], ""); return; }
 
-  $("tblColList").innerHTML = snap.columns.map(c =>
-    `<label><input type="checkbox" data-col="${escapeHtml(c.key)}"${tv.hiddenCols.has(c.key) ? "" : " checked"}> ${escapeHtml(c.key)}</label>`).join("");
-  $("tblColList").querySelectorAll("input").forEach(cb =>
-    cb.addEventListener("change", () => {
-      if (cb.checked) tv.hiddenCols.delete(cb.dataset.col); else tv.hiddenCols.add(cb.dataset.col);
-      renderTable();
-    }));
+  renderColselPopup($("tblColList"), TABLE_KEY_COLS, snap.columns, tv.hiddenCols, tv.pinnedCols, renderTable);
 
   const months = [...new Set(snap.rows.map(r => r.yyyymm))].sort();
   const opts = [{ value: "", label: "指定なし" }, ...months.map(m => ({ value: m, label: m }))];
@@ -869,20 +932,24 @@ function renderTable() {
     });
   }
 
-  const nFz = frozenLimit(tv.frozenCount);
   const arrow = k => (tv.sortKey === k ? (dir === 1 ? " ▲" : " ▼") : "");
-  // 表示列の並び: 年月・PJコード(キー列)+ 選択中の列。左端から nFz 列を固定
-  const headCells =
-    `<th class="${fzClass(0, nFz)}" data-sort="__key">年月${arrow("__key")}</th>` +
-    `<th class="${fzClass(1, nFz)}" data-sort="__key">PJコード</th>` +
-    cols.map((c, ci) => `<th class="${fzClass(ci + 2, nFz, c.kind === "numeric" ? "num" : "")}"` +
-      ` data-sort="${escapeHtml(c.key)}">${escapeHtml(c.key)}${arrow(c.key)}</th>`).join("");
+  // 列名で固定指定された列を左端にまとめる(元の列順は維持)。並びは元の列順→固定列が先頭に来るよう安定分割
+  const allCols = [...TABLE_KEY_COLS.map(c => ({ ...c, kind: "key" })), ...cols];
+  const { ordered, pinnedCount } = partitionPinned(allCols, tv.pinnedCols);
+  const nFz = frozenLimit(pinnedCount);
+
+  const headCells = ordered.map((c, i) => {
+    if (c.kind === "key") return `<th class="${fzClass(i, nFz)}" data-sort="__key">${escapeHtml(c.label)}${c.key === "__ym" ? arrow("__key") : ""}</th>`;
+    return `<th class="${fzClass(i, nFz, c.kind === "numeric" ? "num" : "")}"` +
+      ` data-sort="${escapeHtml(c.key)}">${escapeHtml(c.key)}${arrow(c.key)}</th>`;
+  }).join("");
 
   const bodyRows = rows.map(r => {
     const merged = r.mergedCount > 1
       ? `<span class="merged-mark" title="同一キーの ${r.mergedCount} 行を合算">×${r.mergedCount}</span>` : "";
-    const cells = cols.map((c, ci) => {
-      const i = ci + 2;
+    const cells = ordered.map((c, i) => {
+      if (c.key === "__ym") return `<td class="${fzClass(i, nFz)}">${r.yyyymm}</td>`;
+      if (c.key === "__pj") return `<td class="${fzClass(i, nFz)}">${escapeHtml(r.projectCode)}${merged}</td>`;
       if (c.kind === "numeric") {
         const v = r.values[c.key];
         return `<td class="${fzClass(i, nFz, "num" + (v != null && v < 0 ? " neg" : ""))}">${fmtNumber(v)}</td>`;
@@ -892,19 +959,18 @@ function renderTable() {
       return `<td class="${fzClass(i, nFz, frozen ? "fz-dim" : "")}"` +
         `${frozen && val ? ` title="${escapeHtml(val)}"` : ""}>${escapeHtml(val)}</td>`;
     }).join("");
-    return `<tr><td class="${fzClass(0, nFz)}">${r.yyyymm}</td>` +
-      `<td class="${fzClass(1, nFz)}">${escapeHtml(r.projectCode)}${merged}</td>${cells}</tr>`;
+    return `<tr>${cells}</tr>`;
   }).join("");
 
   // 小計行(フィルター後に表示されている行のみ・表示中の数値列のみ)
-  const footCells = cols.map((c, ci) => {
-    const i = ci + 2;
-    if (c.kind !== "numeric") return `<td class="${fzClass(i, nFz)}"></td>`;
+  const footCells = ordered.map((c, i) => {
+    if (c.key === "__ym") return `<td class="${fzClass(i, nFz)}">小計</td>`;
+    if (c.key === "__pj" || c.kind !== "numeric") return `<td class="${fzClass(i, nFz)}"></td>`;
     let sum = 0, has = false;
     for (const r of rows) { const v = r.values[c.key]; if (v != null) { sum += v; has = true; } }
     return `<td class="${fzClass(i, nFz, "num" + (has && sum < 0 ? " neg" : ""))}">${has ? fmtNumber(sum) : ""}</td>`;
   }).join("");
-  const foot = `<tr><td class="${fzClass(0, nFz)}">小計</td><td class="${fzClass(1, nFz)}"></td>${footCells}</tr>`;
+  const foot = `<tr>${footCells}</tr>`;
 
   $("tblBody").innerHTML =
     `<div class="tbl-scroll"><table class="data"><thead><tr>${headCells}</tr></thead>` +
@@ -950,30 +1016,58 @@ function renderChartControls() {
   $("chSnapshotWrap").classList.toggle("hidden", cv.mode !== "timeline");
   $("chYmWrap").classList.toggle("hidden", cv.mode !== "crossSnapshot");
 
-  // プロジェクト選択(チェックボックス+色ドット)
-  const projects = allProjects();
+  // 消えたプロジェクト(断面が削除された等)の選択を解除
+  const codes = new Set(allProjects().map(p => p.code));
   for (const code of [...cv.selected]) {
-    if (!projects.some(p => p.code === code)) { cv.selected.delete(code); cv.colorMap.delete(code); }
+    if (!codes.has(code)) { cv.selected.delete(code); cv.colorMap.delete(code); }
   }
-  if (!cv.selected.size) {
-    projects.slice(0, Math.min(6, CONFIG.maxSeries)).forEach(p => { cv.selected.add(p.code); chartColorFor(p.code); });
+  renderChartSelected();
+  renderChartCandidates();
+}
+
+// 系列(プロジェクト)を検索して追加する UI。実データで数百〜数千規模になり得るため、
+// 全件チェックボックス列挙はせず、検索でヒットしたものだけを候補表示する
+function renderChartSelected() {
+  const cv = state.chartView;
+  const byCode = new Map(allProjects().map(p => [p.code, p]));
+  const chips = [...cv.selected].map(code => {
+    const p = byCode.get(code) || { code, name: "" };
+    return `<span class="series-chip"><span class="dot" style="background:${chartColorFor(code)}"></span>` +
+      `${escapeHtml(projectLabel(p))}<button type="button" class="chip-x" data-code="${escapeHtml(code)}" title="削除">×</button></span>`;
+  }).join("");
+  $("chSelected").innerHTML =
+    `<span class="note">選択中 ${cv.selected.size} / 最大 ${CONFIG.maxSeries} 系列</span>` + chips;
+  $("chSelected").querySelectorAll(".chip-x").forEach(btn =>
+    btn.addEventListener("click", () => {
+      cv.selected.delete(btn.dataset.code); cv.colorMap.delete(btn.dataset.code);
+      renderChartSelected(); renderChartCandidates(); renderChart();
+    }));
+}
+
+function renderChartCandidates() {
+  const cv = state.chartView;
+  const box = $("chCandidates");
+  const q = $("chSearch").value.trim().toLowerCase();
+  if (!q) { box.classList.add("hidden"); box.innerHTML = ""; return; }
+  box.classList.remove("hidden");
+  if (cv.selected.size >= CONFIG.maxSeries) {
+    box.innerHTML = `<div class="cand-empty">最大 ${CONFIG.maxSeries} 系列まで選択済みです。系列を外してから追加してください</div>`;
+    return;
   }
-  $("chProjects").innerHTML = projects.map(p => {
-    const on = cv.selected.has(p.code);
-    const color = on ? chartColorFor(p.code) : "transparent";
-    return `<label class="checkline"><input type="checkbox" data-code="${escapeHtml(p.code)}"${on ? " checked" : ""}>` +
-      `<span class="dot" style="background:${color};border:1px solid ${on ? color : "var(--axis)"}"></span>${escapeHtml(projectLabel(p))}</label>`;
-  }).join("") + `<span class="note">最大 ${CONFIG.maxSeries} 系列</span>`;
-  $("chProjects").querySelectorAll("input").forEach(cb =>
-    cb.addEventListener("change", () => {
-      const code = cb.dataset.code;
-      if (cb.checked) {
-        if (cv.selected.size >= CONFIG.maxSeries) { cb.checked = false; return; }
-        cv.selected.add(code); chartColorFor(code);
-      } else {
-        cv.selected.delete(code); cv.colorMap.delete(code);
-      }
-      renderChartControls(); renderChart();
+  const terms = q.split(/[\s　]+/).filter(Boolean);
+  const matches = allProjects().filter(p => !cv.selected.has(p.code) &&
+    terms.every(t => (p.code + " " + p.name).toLowerCase().includes(t)));
+  if (!matches.length) { box.innerHTML = `<div class="cand-empty">一致するプロジェクトがありません</div>`; return; }
+  const LIMIT = 30;
+  box.innerHTML = matches.slice(0, LIMIT).map(p =>
+    `<div class="cand" data-code="${escapeHtml(p.code)}">${escapeHtml(projectLabel(p))}</div>`).join("") +
+    (matches.length > LIMIT ? `<div class="cand-more">他 ${matches.length - LIMIT} 件。絞り込みを続けてください</div>` : "");
+  box.querySelectorAll(".cand").forEach(el =>
+    el.addEventListener("click", () => {
+      cv.selected.add(el.dataset.code); chartColorFor(el.dataset.code);
+      $("chSearch").value = "";
+      box.classList.add("hidden"); box.innerHTML = "";
+      renderChartSelected(); renderChart();
     }));
 }
 
@@ -1034,12 +1128,16 @@ function cmpPair() {
   return { base, target };
 }
 
+function cmpNameCol(base, target) {
+  return CONFIG.projectNameColumns.find(c => target.columns.some(x => x.key === c && x.kind === "dim"))
+      || CONFIG.projectNameColumns.find(c => base.columns.some(x => x.key === c && x.kind === "dim"));
+}
+
 function renderCompareControls() {
   const cp = state.compareView;
   const opts = state.snapshots.map(s => ({ value: s.id, label: s.name }));
   fillSelect($("cmpBase"), opts, cp.baseId);
   fillSelect($("cmpTarget"), opts, cp.targetId);
-  fillSelect($("cmpFrozen"), FROZEN_CHOICES, String(cp.frozenCount));
 
   const { base, target } = cmpPair();
   if (!base) {
@@ -1047,16 +1145,14 @@ function renderCompareControls() {
     fillSelect($("cmpYmFrom"), [], ""); fillSelect($("cmpYmTo"), [], "");
     return;
   }
-  // 表示列セレクター(比較対象の共通数値列)
+  // 表示列セレクター(比較対象の共通数値列)+ 固定列(キー列も含めて列名で指定)
   const numCols = diffSnapshots(base, target).numCols;
   for (const c of [...cp.hiddenCols]) if (!numCols.includes(c)) cp.hiddenCols.delete(c);
-  $("cmpColList").innerHTML = numCols.map(c =>
-    `<label><input type="checkbox" data-col="${escapeHtml(c)}"${cp.hiddenCols.has(c) ? "" : " checked"}> ${escapeHtml(c)}</label>`).join("");
-  $("cmpColList").querySelectorAll("input").forEach(cb =>
-    cb.addEventListener("change", () => {
-      if (cb.checked) cp.hiddenCols.delete(cb.dataset.col); else cp.hiddenCols.add(cb.dataset.col);
-      renderCompare();
-    }));
+  const keyCols = [
+    { key: "__state", label: "状態" }, { key: "__ym", label: "年月" }, { key: "__pj", label: "PJコード" },
+    { key: "__name", label: cmpNameCol(base, target) || "プロジェクト名" },
+  ];
+  renderColselPopup($("cmpColList"), keyCols, numCols.map(c => ({ key: c })), cp.hiddenCols, cp.pinnedCols, renderCompare);
 
   const months = [...new Set([...base.rows, ...target.rows].map(r => r.yyyymm))].sort();
   const ymOpts = [{ value: "", label: "指定なし" }, ...months.map(m => ({ value: m, label: m }))];
@@ -1110,36 +1206,36 @@ function renderCompare() {
         `<td class="num">${Math.abs(a.delta) > CONFIG.epsilon ? deltaHtml(a.delta) : "±0"}</td></tr>`).join("") +
       `</tbody></table></div>` : "";
 
-  // 詳細表(状態・年月・PJコード・プロジェクト名は常設。左端から固定列)
-  const nameCol = CONFIG.projectNameColumns.find(c => target.columns.some(x => x.key === c && x.kind === "dim"))
-               || CONFIG.projectNameColumns.find(c => base.columns.some(x => x.key === c && x.kind === "dim"));
-  const nFz = frozenLimit(cp.frozenCount);
+  // 詳細表(状態・年月・PJコード・プロジェクト名は常設。列名で固定指定された列を左端にまとめる)
+  const nameCol = cmpNameCol(base, target);
+  const keyCols = [
+    { key: "__state", label: "状態" }, { key: "__ym", label: "年月" },
+    { key: "__pj", label: "PJコード" }, { key: "__name", label: nameCol || "プロジェクト名" },
+  ];
+  const { ordered, pinnedCount } = partitionPinned(
+    [...keyCols.map(c => ({ ...c, kind: "key" })), ...numCols.map(c => ({ key: c, kind: "numeric" }))],
+    cp.pinnedCols);
+  const nFz = frozenLimit(pinnedCount);
 
-  const head =
-    `<th class="${fzClass(0, nFz)}">状態</th>` +
-    `<th class="${fzClass(1, nFz)}">年月</th>` +
-    `<th class="${fzClass(2, nFz)}">PJコード</th>` +
-    `<th class="${fzClass(3, nFz)}">${escapeHtml(nameCol || "プロジェクト名")}</th>` +
-    numCols.map((c, ci) => `<th class="${fzClass(ci + 4, nFz, "num")}">${escapeHtml(c)}</th>`).join("");
+  const head = ordered.map((c, i) =>
+    `<th class="${fzClass(i, nFz, c.kind === "numeric" ? "num" : "")}">${escapeHtml(c.kind === "numeric" ? c.key : c.label)}</th>`).join("");
 
   const rowHtml = e => {
     const r = e.target ?? e.base;
     const name = nameCol ? r.dims?.[nameCol] ?? "" : "";
-    const cells = numCols.map((c, ci) => {
-      const i = ci + 4;
+    const cells = ordered.map((c, i) => {
+      if (c.key === "__state") return `<td class="${fzClass(i, nFz, "state-cell")}">${e.state === "unchanged" ? "" : CMP_STATE_LABELS[e.state]}</td>`;
+      if (c.key === "__ym") return `<td class="${fzClass(i, nFz)}">${r.yyyymm}</td>`;
+      if (c.key === "__pj") return `<td class="${fzClass(i, nFz)}">${escapeHtml(r.projectCode)}</td>`;
+      if (c.key === "__name") return `<td class="${fzClass(i, nFz, "fz-dim")}"${name ? ` title="${escapeHtml(name)}"` : ""}>${escapeHtml(name)}</td>`;
       if (e.state === "changed") {
-        const d = e.deltas[c];
+        const d = e.deltas[c.key];
         return `<td class="${fzClass(i, nFz, "num" + (d ? " chg" : ""))}">` +
-          `${fmtNumber(e.target.values[c])}${deltaHtml(d)}</td>`;
+          `${fmtNumber(e.target.values[c.key])}${deltaHtml(d)}</td>`;
       }
-      return `<td class="${fzClass(i, nFz, "num")}">${fmtNumber(r.values[c])}</td>`;
+      return `<td class="${fzClass(i, nFz, "num")}">${fmtNumber(r.values[c.key])}</td>`;
     }).join("");
-    return `<tr class="${CMP_ROW_CLASS[e.state]}">` +
-      `<td class="${fzClass(0, nFz, "state-cell")}">${e.state === "unchanged" ? "" : CMP_STATE_LABELS[e.state]}</td>` +
-      `<td class="${fzClass(1, nFz)}">${r.yyyymm}</td>` +
-      `<td class="${fzClass(2, nFz)}">${escapeHtml(r.projectCode)}</td>` +
-      `<td class="${fzClass(3, nFz, "fz-dim")}"${name ? ` title="${escapeHtml(name)}"` : ""}>${escapeHtml(name)}</td>` +
-      cells + "</tr>";
+    return `<tr class="${CMP_ROW_CLASS[e.state]}">${cells}</tr>`;
   };
 
   $("cmpBody").innerHTML = visible.length
@@ -1264,12 +1360,16 @@ function init() {
   $("tblFilter").addEventListener("input", e => { state.tableView.filterText = e.target.value; renderTable(); });
   $("tblYmFrom").addEventListener("change", e => { state.tableView.ymFrom = e.target.value; renderTable(); });
   $("tblYmTo").addEventListener("change", e => { state.tableView.ymTo = e.target.value; renderTable(); });
-  $("tblFrozen").addEventListener("change", e => { state.tableView.frozenCount = +e.target.value; renderTable(); });
 
   $("chMode").addEventListener("change", e => { state.chartView.mode = e.target.value; renderChartControls(); renderChart(); });
   $("chSnapshot").addEventListener("change", e => { state.chartView.snapshotId = e.target.value; renderChart(); });
   $("chYm").addEventListener("change", e => { state.chartView.yyyymm = e.target.value; renderChart(); });
   $("chMetric").addEventListener("change", e => { state.chartView.metric = e.target.value; renderChart(); });
+  $("chSearch").addEventListener("input", renderChartCandidates);
+  $("chSearch").addEventListener("focus", renderChartCandidates);
+  $("chSearch").addEventListener("blur", () => setTimeout(() => {
+    $("chCandidates").classList.add("hidden"); $("chCandidates").innerHTML = "";
+  }, 150));
 
   // base/target 変更時のみコントロール再生成(フィルター入力のフォーカスを守るため他は renderCompare のみ)
   $("cmpBase").addEventListener("change", e => { state.compareView.baseId = e.target.value; renderCompareControls(); renderCompare(); });
@@ -1277,7 +1377,6 @@ function init() {
   $("cmpFilter").addEventListener("input", e => { state.compareView.filterText = e.target.value; renderCompare(); });
   $("cmpYmFrom").addEventListener("change", e => { state.compareView.ymFrom = e.target.value; renderCompare(); });
   $("cmpYmTo").addEventListener("change", e => { state.compareView.ymTo = e.target.value; renderCompare(); });
-  $("cmpFrozen").addEventListener("change", e => { state.compareView.frozenCount = +e.target.value; renderCompare(); });
 
   refreshAll();
 }

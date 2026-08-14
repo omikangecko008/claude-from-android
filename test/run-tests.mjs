@@ -19,7 +19,7 @@ const code = html.slice(html.indexOf("\n", beginIdx) + 1, html.lastIndexOf("\n",
 const exported = ["CONFIG", "decodeBytes", "toHalfWidth", "parseNumber", "normalizeYyyymm",
   "escapeHtml", "fmtNumber", "sniffFormat", "parseCsv", "normalizeSnapshot",
   "mergeDuplicateKeys", "mergeGrids", "makeRowFilter",
-  "diffSnapshots", "compareEntries", "summarizeCompare", "niceTicks"];
+  "diffSnapshots", "compareEntries", "summarizeCompare", "niceTicks", "partitionPinned"];
 const lib = vm.runInNewContext(`${code}\n;({${exported.join(",")}})`, { TextDecoder });
 
 let passed = 0, failed = 0;
@@ -261,6 +261,19 @@ function ok(cond, label) { eq(!!cond, true, label); }
   ok(t.lo <= 0 && t.hi >= 980, "niceTicks: 範囲がデータを覆う");
   const t2 = lib.niceTicks(-500, 300, 5);
   ok(t2.ticks.includes(0) && t2.lo <= -500, "niceTicks: 負数範囲");
+}
+
+/* ---- partitionPinned ---- */
+{
+  const cols = [{ key: "a" }, { key: "b" }, { key: "c" }, { key: "d" }];
+  const r1 = lib.partitionPinned(cols, new Set(["c", "a"]));
+  eq(r1.ordered.map(c => c.key), ["a", "c", "b", "d"], "partitionPinned: 固定列が先頭、内部順序は元のまま");
+  eq(r1.pinnedCount, 2, "partitionPinned: pinnedCount");
+  const r2 = lib.partitionPinned(cols, new Set());
+  eq(r2.ordered.map(c => c.key), ["a", "b", "c", "d"], "partitionPinned: 固定なしなら元の順序のまま");
+  eq(r2.pinnedCount, 0, "partitionPinned: 固定なしは0");
+  const r3 = lib.partitionPinned(cols, new Set(["a", "b", "c", "d"]));
+  eq(r3.ordered.map(c => c.key), ["a", "b", "c", "d"], "partitionPinned: 全固定は元の順序のまま");
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);
